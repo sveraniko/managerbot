@@ -19,7 +19,7 @@
 ## Queue backing and read-model integration
 - Added explicit repository contracts for actor/presence/queue/case operations.
 - Implemented SQL repositories targeting `core`, `ops`, and `read` schemas (for MB3/MB3a-prepared operational backbone).
-- Queue list ordering uses backend read-model ordering (`sort_ts desc`, `case_display_number asc`) and keeps display-number identity stable in UI.
+- MB4a hardening switched queue derivation to canonical `ops.quote_case_ops_states` + `core.quote_cases` fields, with deterministic business ordering (priority, escalation, recency, display number) while preserving stable display-number identity in UI.
 
 ## Actions supported in MB4
 - Presence toggle (`online <-> away`) persisted through backend presence repository.

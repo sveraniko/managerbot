@@ -49,6 +49,6 @@ class FakeCaseRepository:
             return False
         detail.assignment_label = "Assigned to me"
         detail.operational_status = "active"
-        detail.waiting_state = "manager"
+        detail.waiting_state = "waiting_manager"
         detail.thread_entries.append(ThreadEntry(direction="system", body="Case claimed", created_at=datetime.now(timezone.utc)))
         return True
