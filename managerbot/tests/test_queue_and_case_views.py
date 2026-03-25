@@ -13,7 +13,7 @@ def test_queue_rendering_stable_numbers_and_order() -> None:
     actor = ManagerActor(uuid4(), 1, "Manager", SystemRole.MANAGER)
     items = [
         QueueItem(uuid4(), 101, "Acme", "new", "none", None, "urgent", 1, datetime.now(timezone.utc)),
-        QueueItem(uuid4(), 102, "Beta", "active", "manager", actor.actor_id, "normal", 0, datetime.now(timezone.utc)),
+        QueueItem(uuid4(), 102, "Beta", "active", "waiting_manager", actor.actor_id, "normal", 0, datetime.now(timezone.utc)),
     ]
     service = ManagerSurfaceService(FakeQueueRepository({"new": items}), FakeCaseRepository({}), FakePresenceRepository(), page_size=2)
     state = ManagerSessionState(queue_key="new", queue_offset=0)
