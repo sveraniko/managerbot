@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 from uuid import uuid4
 
-from app.models import CaseDetail, ManagerActor, NotificationEvent, PresenceStatus, QueueItem, ThreadEntry
+from app.models import CaseDetail, HotTaskBucket, HotTaskBucketKey, HotTaskItem, ManagerActor, NotificationEvent, PresenceStatus, QueueItem, ThreadEntry
 
 
 class FakeActorRepository:
@@ -41,6 +41,35 @@ class FakeQueueRepository:
 
     async def list_queue(self, queue_key: str, actor_id: UUID, offset: int, limit: int):
         return self.queues.get(queue_key, [])[offset : offset + limit]
+
+    async def hot_task_buckets(self, actor_id: UUID, item_limit: int) -> list[HotTaskBucket]:
+        _ = actor_id
+        buckets: list[HotTaskBucket] = []
+        mappings = [
+            (HotTaskBucketKey.NEEDS_REPLY_NOW, "Needs reply now", "waiting_me"),
+            (HotTaskBucketKey.NEW_BUSINESS, "New business", "new"),
+            (HotTaskBucketKey.SLA_AT_RISK, "SLA at risk", "waiting_me"),
+            (HotTaskBucketKey.URGENT_ESCALATED, "Urgent / VIP / escalated", "urgent"),
+            (HotTaskBucketKey.FAILED_DELIVERY, "Failed delivery", "waiting_me"),
+        ]
+        for key, title, queue_key in mappings:
+            items = [
+                HotTaskItem(
+                    case_id=item.case_id,
+                    case_display_number=item.case_display_number,
+                    customer_label=item.customer_label,
+                    reason=f"{title.lower()} signal",
+                    priority=item.priority,
+                    escalation_level=item.escalation_level,
+                    waiting_state=item.waiting_state,
+                    sla_due_at=item.sla_due_at,
+                    last_customer_message_at=item.last_customer_message_at,
+                    last_event_at=item.last_customer_message_at,
+                )
+                for item in self.queues.get(queue_key, [])[:item_limit]
+            ]
+            buckets.append(HotTaskBucket(key=key, title=title, queue_key=queue_key, items=items))
+        return buckets
 
 
 class FakeCaseRepository:

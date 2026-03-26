@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.models import CaseDetail, ManagerActor, PresenceStatus, QueueItem
+from app.models import CaseDetail, HotTaskBucket, ManagerActor, PresenceStatus, QueueItem
 from app.repositories.contracts import CaseRepository, PresenceRepository, QueueRepository
 from app.services.ai_reader import AIReaderResult, AIReaderService
 from app.services.ai_recommender import AIRecommendationResult, AIRecommenderService
@@ -21,6 +21,7 @@ class ManagerSurfaceService:
         page_size: int = 5,
         sla_service: SlaService | None = None,
         low_confidence_threshold: float = 0.65,
+        workdesk_bucket_size: int = 3,
     ) -> None:
         self._queue_repo = queue_repo
         self._case_repo = case_repo
@@ -31,11 +32,13 @@ class ManagerSurfaceService:
         self._page_size = page_size
         self._sla_service = sla_service or SlaService()
         self._low_confidence_threshold = low_confidence_threshold
+        self._workdesk_bucket_size = workdesk_bucket_size
 
-    async def hub_view(self, actor: ManagerActor) -> tuple[PresenceStatus, dict[str, int]]:
+    async def hub_view(self, actor: ManagerActor) -> tuple[PresenceStatus, dict[str, int], list[HotTaskBucket]]:
         presence = await self._presence_repo.get_status(actor.actor_id)
         counts = await self._queue_repo.summary_counts(actor.actor_id)
-        return presence, counts
+        buckets = await self._queue_repo.hot_task_buckets(actor.actor_id, self._workdesk_bucket_size)
+        return presence, counts, buckets
 
     async def queue_page(self, actor: ManagerActor, state: ManagerSessionState) -> list[QueueItem]:
         if not state.queue_key:

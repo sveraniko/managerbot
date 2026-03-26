@@ -1,25 +1,49 @@
-from app.models import CaseDetail, ManagerActor, PresenceStatus, QueueItem
+from datetime import datetime, timezone
+
+from app.models import CaseDetail, HotTaskBucket, HotTaskItem, ManagerActor, PresenceStatus, QueueItem
 from app.services.ai_reader import AIReaderAnalysis
 from app.services.ai_recommender import AIRecommendation
 from app.services.ai_state import AISnapshotMeta
 from app.services.sla import SlaService
 
 
-def render_hub(actor: ManagerActor, presence: PresenceStatus, counts: dict[str, int]) -> str:
-    return (
-        f"ManagerBot Hub\\n"
-        f"Manager: {actor.display_name} ({actor.role.value})\\n"
-        f"Presence: {presence.value}\\n\\n"
-        f"Queues\\n"
-        f"New/Unassigned: {counts.get('new', 0)}\\n"
-        f"Assigned to me: {counts.get('mine', 0)}\\n"
-        f"Waiting for me: {counts.get('waiting_me', 0)}\\n"
-        f"Waiting for customer: {counts.get('waiting_customer', 0)}\\n"
-        f"Urgent: {counts.get('urgent', 0)}\\n"
-        f"Escalated: {counts.get('escalated', 0)}\\n"
-        f"SLA near: {counts.get('sla_near', 0)}\\n"
-        f"SLA overdue: {counts.get('sla_overdue', 0)}"
+def render_hub(actor: ManagerActor, presence: PresenceStatus, counts: dict[str, int], buckets: list[HotTaskBucket]) -> str:
+    attention_load = len([bucket for bucket in buckets if bucket.items])
+    lines = [
+        "ManagerBot Workdesk",
+        f"Manager: {actor.display_name} ({actor.role.value})",
+        f"Presence: {presence.value}",
+        (
+            f"Attention: buckets {attention_load}/5 | "
+            f"overdue {counts.get('sla_overdue', 0)} | failed {len(_bucket_items(buckets, 'failed_delivery'))} | "
+            f"new {counts.get('new', 0)}"
+        ),
+        "",
+        "Hot tasks",
+    ]
+    for bucket in buckets:
+        lines.append(f"{bucket.title}: {len(bucket.items)}")
+        if not bucket.items:
+            lines.append("- none")
+            continue
+        for item in bucket.items:
+            lines.append(f"- {_render_hot_task_item(item)}")
+
+    lines.extend(
+        [
+            "",
+            "Queue summary",
+            f"New/Unassigned: {counts.get('new', 0)}",
+            f"Assigned to me: {counts.get('mine', 0)}",
+            f"Waiting for me: {counts.get('waiting_me', 0)}",
+            f"Waiting for customer: {counts.get('waiting_customer', 0)}",
+            f"Urgent: {counts.get('urgent', 0)}",
+            f"Escalated: {counts.get('escalated', 0)}",
+            f"SLA near: {counts.get('sla_near', 0)}",
+            f"SLA overdue: {counts.get('sla_overdue', 0)}",
+        ]
     )
+    return "\\n".join(lines)
 
 
 def render_queue(queue_key: str, items: list[QueueItem], offset: int) -> str:
@@ -125,3 +149,33 @@ def _snippet(text: str, limit: int = 140) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 1] + "…"
+
+
+def _bucket_items(buckets: list[HotTaskBucket], key: str) -> list[HotTaskItem]:
+    for bucket in buckets:
+        if bucket.key.value == key:
+            return bucket.items
+    return []
+
+
+def _render_hot_task_item(item: HotTaskItem) -> str:
+    order_suffix = f" · O#{item.linked_order_display_number}" if item.linked_order_display_number else ""
+    customer = item.customer_label or "-"
+    cues = [f"p:{item.priority}"]
+    if item.escalation_level > 0:
+        cues.append(f"esc:{item.escalation_level}")
+    if item.sla_due_at:
+        cues.append(f"sla:{_age_hint(item.sla_due_at)}")
+    if item.last_event_at:
+        cues.append(f"t:{_age_hint(item.last_event_at)}")
+    return f"#{item.case_display_number}{order_suffix} {customer} — {item.reason} ({', '.join(cues)})"
+
+
+def _age_hint(ts: datetime) -> str:
+    now = datetime.now(timezone.utc)
+    delta = int((now - ts).total_seconds())
+    if delta >= 0:
+        mins = max(1, delta // 60)
+        return f"{mins}m ago"
+    mins = max(1, abs(delta) // 60)
+    return f"in {mins}m"

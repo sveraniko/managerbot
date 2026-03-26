@@ -1,13 +1,26 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.bot.callbacks import MBCallback
-from app.models import QueueItem
+from app.models import HotTaskBucket, QueueItem
 
 
-def hub_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="Presence", callback_data=MBCallback(action="presence").pack())],
+def hub_keyboard(buckets: list[HotTaskBucket]) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(text="Presence", callback_data=MBCallback(action="presence").pack())]]
+    for bucket in buckets:
+        for item in bucket.items:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"{_bucket_short(bucket.title)} · Case #{item.case_display_number}",
+                        callback_data=MBCallback(action="case", value=str(item.case_id)).pack(),
+                    )
+                ]
+            )
+        rows.append(
+            [InlineKeyboardButton(text=f"Open {bucket.title}", callback_data=MBCallback(action="queue", value=bucket.queue_key).pack())]
+        )
+    rows.extend(
+        [
             [InlineKeyboardButton(text="New/Unassigned", callback_data=MBCallback(action="queue", value="new").pack())],
             [InlineKeyboardButton(text="Assigned to me", callback_data=MBCallback(action="queue", value="mine").pack())],
             [InlineKeyboardButton(text="Waiting for me", callback_data=MBCallback(action="queue", value="waiting_me").pack())],
@@ -17,6 +30,7 @@ def hub_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Refresh", callback_data=MBCallback(action="refresh", value="hub").pack())],
         ]
     )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def queue_keyboard(items: list[QueueItem]) -> InlineKeyboardMarkup:
@@ -78,3 +92,14 @@ def reply_preview_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Cancel", callback_data=MBCallback(action="compose_cancel").pack())],
         ]
     )
+
+
+def _bucket_short(title: str) -> str:
+    mapping = {
+        "Needs reply now": "Reply",
+        "New business": "New",
+        "SLA at risk": "SLA",
+        "Urgent / VIP / escalated": "Urgent",
+        "Failed delivery": "Failed",
+    }
+    return mapping.get(title, "Hot")
