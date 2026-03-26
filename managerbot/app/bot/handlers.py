@@ -7,9 +7,10 @@ from aiogram.filters import CommandStart
 from aiogram.types import CallbackQuery, Message
 
 from app.bot.callbacks import MBCallback
-from app.bot.keyboards import case_keyboard, hub_keyboard, queue_keyboard
+from app.bot.keyboards import case_keyboard, compose_keyboard, hub_keyboard, queue_keyboard, reply_preview_keyboard
 from app.bot.panel_manager import PanelManager
 from app.services.access import AccessService
+from app.services.compose import ComposeStateService
 from app.services.manager_surface import ManagerSurfaceService
 from app.services.navigation import NavigationService
 from app.services.rendering import render_case_detail, render_hub, render_queue
@@ -24,6 +25,7 @@ def build_router(
     panel_manager: PanelManager,
 ) -> Router:
     router = Router(name="managerbot")
+    compose_service = ComposeStateService()
 
     async def authorize(message: Message):
         actor = await access_service.resolve_authorized_actor(message.from_user.id)
@@ -43,6 +45,51 @@ def build_router(
         await session_store.set(message.from_user.id, state)
         presence, counts = await surface_service.hub_view(actor)
         await panel_manager.render(message, render_hub(actor, presence, counts), hub_keyboard())
+
+    async def render_case(message: Message, actor, state) -> None:
+        if not state.selected_case_id:
+            await message.answer("Case context is missing. Open the case from queue.")
+            return
+        detail = await surface_service.case_detail(actor, state.selected_case_id)
+        if detail:
+            await panel_manager.render(message, render_case_detail(detail), case_keyboard())
+
+    @router.message(F.text)
+    async def compose_input(message: Message) -> None:
+        actor = await authorize(message)
+        if not actor:
+            return
+        state = await session_store.get(message.from_user.id)
+        if state.compose_mode not in {"reply", "note"}:
+            return
+        if compose_service.is_stale(state):
+            compose_service.cancel(state)
+            await session_store.set(message.from_user.id, state)
+            await message.answer("Compose context expired. Re-open the case and start again.")
+            return
+
+        state.compose_draft_text = message.text.strip()
+        if not state.compose_draft_text:
+            await message.answer("Text is empty. Send text or cancel.")
+            return
+
+        if state.compose_mode == "reply":
+            case_detail = await surface_service.case_detail(actor, state.compose_case_id)
+            if not case_detail:
+                compose_service.cancel(state)
+                await session_store.set(message.from_user.id, state)
+                await message.answer("Case context expired. Re-open the case.")
+                return
+            preview = (
+                f"Reply preview for Case #{case_detail.case_display_number}\n\n"
+                f"{state.compose_draft_text}"
+            )
+            await panel_manager.render(message, preview, reply_preview_keyboard())
+        else:
+            await surface_service.save_internal_note(actor, state.compose_case_id, state.compose_draft_text)
+            compose_service.cancel(state)
+            await render_case(message, actor, state)
+        await session_store.set(message.from_user.id, state)
 
     @router.callback_query(MBCallback.filter())
     async def cb_handler(callback: CallbackQuery, callback_data: MBCallback) -> None:
@@ -85,6 +132,56 @@ def build_router(
                 detail = await surface_service.case_detail(actor, state.selected_case_id)
                 if detail:
                     await panel_manager.render(msg, render_case_detail(detail), case_keyboard())
+        elif callback_data.action == "reply_start":
+            if not state.selected_case_id:
+                await callback.answer("Open a case first", show_alert=True)
+            else:
+                compose_service.start_reply(state, state.selected_case_id)
+                await panel_manager.render(
+                    msg,
+                    "Compose reply to customer.\nSend the reply text in the next message.\nYou will be asked to confirm before sending.",
+                    compose_keyboard(),
+                )
+        elif callback_data.action == "note_start":
+            if not state.selected_case_id:
+                await callback.answer("Open a case first", show_alert=True)
+            else:
+                compose_service.start_note(state, state.selected_case_id)
+                await panel_manager.render(
+                    msg,
+                    "Compose internal note.\nSend note text in the next message.\nThis note is internal-only.",
+                    compose_keyboard(),
+                )
+        elif callback_data.action == "reply_confirm":
+            if state.compose_mode != "reply" or not state.compose_case_id or not state.compose_draft_text:
+                await callback.answer("No reply draft to send.", show_alert=True)
+            else:
+                result_notice = await surface_service.send_reply(actor, state.compose_case_id, state.compose_draft_text)
+                compose_service.cancel(state)
+                detail = await surface_service.case_detail(actor, state.selected_case_id)
+                if detail:
+                    await panel_manager.render(msg, f"{result_notice}\n\n{render_case_detail(detail)}", case_keyboard())
+        elif callback_data.action == "reply_edit":
+            if state.compose_mode != "reply" or not state.compose_case_id:
+                await callback.answer("Reply compose is not active.", show_alert=True)
+            else:
+                await panel_manager.render(
+                    msg,
+                    "Edit reply: send updated text in the next message.",
+                    compose_keyboard(),
+                )
+        elif callback_data.action == "compose_cancel":
+            compose_service.cancel(state)
+            detail = await surface_service.case_detail(actor, state.selected_case_id) if state.selected_case_id else None
+            if detail:
+                await panel_manager.render(msg, render_case_detail(detail), case_keyboard())
+            else:
+                presence, counts = await surface_service.hub_view(actor)
+                await panel_manager.render(msg, render_hub(actor, presence, counts), hub_keyboard())
+        elif callback_data.action == "compose_back_case":
+            detail = await surface_service.case_detail(actor, state.selected_case_id) if state.selected_case_id else None
+            if detail:
+                await panel_manager.render(msg, render_case_detail(detail), case_keyboard())
         elif callback_data.action == "back":
             state = navigation_service.back(state)
             if state.panel_key.startswith("queue:") and state.queue_key:

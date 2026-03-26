@@ -53,6 +53,21 @@ class ThreadEntry:
     direction: str
     body: str
     created_at: datetime
+    delivery_status: str = "not_applicable"
+
+
+@dataclass(slots=True)
+class InternalNote:
+    body: str
+    author_label: str
+    created_at: datetime
+
+
+@dataclass(slots=True)
+class DeliverySnapshot:
+    status: str
+    attempted_at: datetime | None
+    error_message: str | None = None
 
 
 @dataclass(slots=True)
@@ -68,3 +83,5 @@ class CaseDetail:
     linked_order_display_number: int | None = None
     linked_quote_display_number: int | None = None
     thread_entries: list[ThreadEntry] = field(default_factory=list)
+    internal_notes: list[InternalNote] = field(default_factory=list)
+    last_delivery: DeliverySnapshot | None = None

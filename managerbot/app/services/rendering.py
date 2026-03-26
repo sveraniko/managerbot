@@ -39,7 +39,21 @@ def render_case_detail(detail: CaseDetail) -> str:
     ]
     if detail.linked_order_display_number:
         head.append(f"Order #{detail.linked_order_display_number}")
-    head.append("\nThread (read-only):")
+    if detail.last_delivery:
+        delivery_line = f"Delivery: {detail.last_delivery.status}"
+        if detail.last_delivery.error_message:
+            delivery_line += f" ({detail.last_delivery.error_message})"
+        head.append(delivery_line)
+    head.append("\nCustomer thread:")
     for entry in detail.thread_entries[-5:]:
-        head.append(f"- {entry.direction}: {entry.body}")
+        suffix = ""
+        if entry.direction == "outbound":
+            suffix = f" [{entry.delivery_status}]"
+        head.append(f"- {entry.direction}: {entry.body}{suffix}")
+    head.append("\nInternal notes:")
+    if detail.internal_notes:
+        for note in detail.internal_notes[-3:]:
+            head.append(f"- {note.author_label}: {note.body}")
+    else:
+        head.append("- none")
     return "\\n".join(head)

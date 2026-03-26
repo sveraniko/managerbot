@@ -13,6 +13,9 @@ class NavigationService:
         state.queue_key = None
         state.selected_case_id = None
         state.queue_offset = 0
+        state.compose_mode = None
+        state.compose_case_id = None
+        state.compose_draft_text = None
         return state
 
     def back(self, state: ManagerSessionState) -> ManagerSessionState:

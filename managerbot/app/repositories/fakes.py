@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from uuid import UUID
+from uuid import uuid4
 
 from app.models import CaseDetail, ManagerActor, PresenceStatus, QueueItem, ThreadEntry
 
@@ -52,3 +53,37 @@ class FakeCaseRepository:
         detail.waiting_state = "waiting_manager"
         detail.thread_entries.append(ThreadEntry(direction="system", body="Case claimed", created_at=datetime.now(timezone.utc)))
         return True
+
+    async def add_internal_note(self, case_id: UUID, actor_id: UUID, body_text: str):
+        detail = self.details.get(case_id)
+        if not detail:
+            return False
+        from app.models import InternalNote
+
+        detail.internal_notes.append(InternalNote(body=body_text, author_label="Assigned to me", created_at=datetime.now(timezone.utc)))
+        return True
+
+    async def create_outbound_reply(self, case_id: UUID, actor_id: UUID, body_text: str):
+        detail = self.details.get(case_id)
+        if not detail:
+            return None
+        entry_id = str(uuid4())
+        attempt_id = str(uuid4())
+        detail.thread_entries.append(
+            ThreadEntry(direction="outbound", body=body_text, created_at=datetime.now(timezone.utc), delivery_status="pending")
+        )
+        return entry_id, attempt_id, 555001
+
+    async def mark_reply_delivery(
+        self,
+        thread_entry_id: str,
+        attempt_id: str,
+        status: str,
+        *,
+        telegram_message_id: int | None,
+        error_message: str | None,
+    ) -> None:
+        _ = (thread_entry_id, attempt_id, telegram_message_id, error_message)
+        for detail in self.details.values():
+            if detail.thread_entries:
+                detail.thread_entries[-1].delivery_status = status

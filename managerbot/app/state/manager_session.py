@@ -20,6 +20,9 @@ class ManagerSessionState:
     queue_key: str | None = None
     selected_case_id: UUID | None = None
     queue_offset: int = 0
+    compose_mode: str | None = None
+    compose_case_id: UUID | None = None
+    compose_draft_text: str | None = None
 
 
 class ManagerSessionStore(Protocol):
@@ -43,12 +46,16 @@ class RedisManagerSessionStore:
         payload = json.loads(raw)
         if payload.get("selected_case_id"):
             payload["selected_case_id"] = UUID(payload["selected_case_id"])
+        if payload.get("compose_case_id"):
+            payload["compose_case_id"] = UUID(payload["compose_case_id"])
         return ManagerSessionState(**payload)
 
     async def set(self, telegram_user_id: int, state: ManagerSessionState) -> None:
         payload = asdict(state)
         if payload["selected_case_id"]:
             payload["selected_case_id"] = str(payload["selected_case_id"])
+        if payload["compose_case_id"]:
+            payload["compose_case_id"] = str(payload["compose_case_id"])
         await self._redis.set(self._key(telegram_user_id), json.dumps(payload))
 
 
