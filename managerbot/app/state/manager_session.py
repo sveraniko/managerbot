@@ -26,8 +26,10 @@ class ManagerSessionState:
     ai_case_id: UUID | None = None
     ai_analysis: dict[str, Any] | None = None
     ai_error: str | None = None
+    ai_analysis_meta: dict[str, Any] | None = None
     ai_recommendation: dict[str, Any] | None = None
     ai_recommendation_error: str | None = None
+    ai_recommendation_meta: dict[str, Any] | None = None
 
 
 class ManagerSessionStore(Protocol):

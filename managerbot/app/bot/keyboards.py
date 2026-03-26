@@ -26,13 +26,15 @@ def queue_keyboard(items: list[QueueItem]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def case_keyboard(*, has_ai_recommendation: bool = False) -> InlineKeyboardMarkup:
+def case_keyboard(*, has_ai_recommendation: bool = False, ai_low_confidence: bool = False) -> InlineKeyboardMarkup:
     ai_rows = []
     if has_ai_recommendation:
+        reply_label = "Use AI reply draft" if not ai_low_confidence else "Use AI reply draft ⚠"
+        note_label = "Use AI note draft" if not ai_low_confidence else "Use AI note draft ⚠"
         ai_rows.extend(
             [
-                [InlineKeyboardButton(text="Use AI reply draft", callback_data=MBCallback(action="ai_use_reply_draft").pack())],
-                [InlineKeyboardButton(text="Use AI note draft", callback_data=MBCallback(action="ai_use_note_draft").pack())],
+                [InlineKeyboardButton(text=reply_label, callback_data=MBCallback(action="ai_use_reply_draft").pack())],
+                [InlineKeyboardButton(text=note_label, callback_data=MBCallback(action="ai_use_note_draft").pack())],
             ]
         )
     return InlineKeyboardMarkup(
