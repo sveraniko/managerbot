@@ -538,7 +538,11 @@ class SqlCaseRepository:
                                qc.customer_label as customer_label, qc.customer_actor_id, qc.customer_telegram_chat_id,
                                b.telegram_user_id as customer_telegram_user_id,
                                coalesce(am.display_name, 'Unassigned') as assignment_label,
-                               o.display_number as linked_order_display_number
+                               o.display_number as linked_order_display_number,
+                               null as linked_order_status,
+                               null as linked_order_summary,
+                               null as linked_order_pdf_url,
+                               null as linked_order_document_label
                         from core.quote_cases qc
                         join ops.quote_case_ops_states ops on ops.quote_case_id=qc.id
                         left join core.actors am on am.id=ops.assigned_manager_actor_id
@@ -606,6 +610,10 @@ class SqlCaseRepository:
             assignment_label=head.assignment_label,
             sla_due_at=_as_dt(head.sla_due_at),
             linked_order_display_number=head.linked_order_display_number,
+            linked_order_status=head.linked_order_status,
+            linked_order_summary=head.linked_order_summary,
+            linked_order_pdf_url=head.linked_order_pdf_url,
+            linked_order_document_label=head.linked_order_document_label,
             linked_quote_display_number=head.case_display_number,
             customer_label=head.customer_label,
             customer_card=CustomerCard(

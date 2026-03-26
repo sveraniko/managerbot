@@ -87,6 +87,7 @@ def render_case_detail(
     ]
     if detail.linked_order_display_number:
         head.append(f"Order #{detail.linked_order_display_number}")
+    head.extend(_render_order_action_block(detail))
     if detail.last_delivery:
         delivery_line = f"Delivery: {detail.last_delivery.status}"
         if detail.last_delivery.error_message:
@@ -150,6 +151,33 @@ def render_case_detail(
     else:
         head.append("- No recommendation yet. Tap AI Analyze + Recommend.")
     return "\\n".join(head)
+
+
+def render_order_summary_panel(detail: CaseDetail, *, configured_targets: dict[str, bool]) -> str:
+    lines = [
+        f"Order summary · Case #{detail.case_display_number}",
+        "",
+        f"Order: #{detail.linked_order_display_number}",
+        f"Quote: #{detail.linked_quote_display_number}",
+        f"Customer: {detail.customer_label or 'Unavailable'}",
+        f"Operational: {detail.operational_status}/{detail.waiting_state}",
+        f"Priority/Escalation: {detail.priority.upper()}/{detail.escalation_level}",
+    ]
+    if detail.linked_order_status:
+        lines.append(f"Order status: {detail.linked_order_status}")
+    if detail.linked_order_summary:
+        lines.append(f"Order cue: {detail.linked_order_summary}")
+    lines.append(f"PDF: {'available' if detail.linked_order_pdf_url else 'not available'}")
+    if detail.linked_order_pdf_url:
+        lines.append(f"Document ref: {detail.linked_order_document_label or detail.linked_order_pdf_url}")
+    lines.append("")
+    lines.append("Handoff targets:")
+    lines.append(f"- Production: {'configured' if configured_targets.get('production') else 'not configured'}")
+    lines.append(f"- Warehouse: {'configured' if configured_targets.get('warehouse') else 'not configured'}")
+    lines.append(f"- Accountant: {'configured' if configured_targets.get('accountant') else 'not configured'}")
+    lines.append("")
+    lines.append("Use compact summary send/handoff actions below.")
+    return "\\n".join(lines)
 
 
 def render_contact_actions_panel(detail: CaseDetail) -> str:
@@ -233,6 +261,20 @@ def _render_customer_card(card: CustomerCard) -> list[str]:
     lines.append(f"- Telegram chat ID: {card.telegram_chat_id if card.telegram_chat_id is not None else 'Unavailable'}")
     lines.append(f"- Telegram user ID: {card.telegram_user_id if card.telegram_user_id is not None else 'Unavailable'}")
     lines.append(f"- Phone: {card.phone_number or 'Unavailable'}")
+    return lines
+
+
+def _render_order_action_block(detail: CaseDetail) -> list[str]:
+    if not detail.linked_order_display_number:
+        return []
+    lines = ["", "Order actions:"]
+    lines.append(f"- Linked order: #{detail.linked_order_display_number}")
+    if detail.linked_order_status:
+        lines.append(f"- Status: {detail.linked_order_status}")
+    if detail.linked_order_summary:
+        lines.append(f"- Cue: {_snippet(detail.linked_order_summary, 160)}")
+    lines.append(f"- PDF/document: {'available' if detail.linked_order_pdf_url else 'not available'}")
+    lines.append("- Open order summary for share/handoff actions.")
     return lines
 
 

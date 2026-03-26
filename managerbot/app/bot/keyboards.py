@@ -47,7 +47,12 @@ def queue_keyboard(items: list[QueueItem]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def case_keyboard(*, has_ai_recommendation: bool = False, ai_low_confidence: bool = False) -> InlineKeyboardMarkup:
+def case_keyboard(
+    *,
+    has_ai_recommendation: bool = False,
+    ai_low_confidence: bool = False,
+    has_order_actions: bool = False,
+) -> InlineKeyboardMarkup:
     ai_rows = []
     if has_ai_recommendation:
         reply_label = "Use AI reply draft" if not ai_low_confidence else "Use AI reply draft ⚠"
@@ -58,8 +63,7 @@ def case_keyboard(*, has_ai_recommendation: bool = False, ai_low_confidence: boo
                 [InlineKeyboardButton(text=note_label, callback_data=MBCallback(action="ai_use_note_draft").pack())],
             ]
         )
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+    rows = [
             [InlineKeyboardButton(text="Claim / Take into work", callback_data=MBCallback(action="claim").pack())],
             [InlineKeyboardButton(text="Escalate to owner", callback_data=MBCallback(action="escalate_owner").pack())],
             [
@@ -73,12 +77,35 @@ def case_keyboard(*, has_ai_recommendation: bool = False, ai_low_confidence: boo
             [InlineKeyboardButton(text="Reply to customer", callback_data=MBCallback(action="reply_start").pack())],
             [InlineKeyboardButton(text="Add internal note", callback_data=MBCallback(action="note_start").pack())],
             [InlineKeyboardButton(text="Contact actions", callback_data=MBCallback(action="contact_panel").pack())],
+    ]
+    if has_order_actions:
+        rows.append([InlineKeyboardButton(text="Order summary / handoff", callback_data=MBCallback(action="order_summary_open").pack())])
+    rows.extend(
+        [
             [InlineKeyboardButton(text="AI Analyze + Recommend / Refresh", callback_data=MBCallback(action="ai_analyze").pack())],
             *ai_rows,
             [InlineKeyboardButton(text="Refresh", callback_data=MBCallback(action="refresh", value="case").pack())],
             [InlineKeyboardButton(text="Back", callback_data=MBCallback(action="back").pack()), InlineKeyboardButton(text="Home", callback_data=MBCallback(action="home").pack())],
         ]
     )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def order_actions_keyboard(*, has_pdf: bool, configured_targets: dict[str, bool]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text="Send compact summary here", callback_data=MBCallback(action="order_send_summary_here").pack())],
+    ]
+    if has_pdf:
+        rows.append([InlineKeyboardButton(text="Send PDF/document ref here", callback_data=MBCallback(action="order_send_pdf_here").pack())])
+    if configured_targets.get("production"):
+        rows.append([InlineKeyboardButton(text="Send to production", callback_data=MBCallback(action="order_handoff", value="production").pack())])
+    if configured_targets.get("warehouse"):
+        rows.append([InlineKeyboardButton(text="Send to warehouse", callback_data=MBCallback(action="order_handoff", value="warehouse").pack())])
+    if configured_targets.get("accountant"):
+        rows.append([InlineKeyboardButton(text="Send to accountant", callback_data=MBCallback(action="order_handoff", value="accountant").pack())])
+    rows.append([InlineKeyboardButton(text="Back to case", callback_data=MBCallback(action="order_back").pack())])
+    rows.append([InlineKeyboardButton(text="Home", callback_data=MBCallback(action="home").pack())])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def contact_actions_keyboard(card: CustomerCard) -> InlineKeyboardMarkup:

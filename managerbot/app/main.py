@@ -21,6 +21,7 @@ from app.services.ai_recommender import AIRecommenderConfig, AIRecommenderServic
 from app.services.delivery import TelegramCustomerDeliveryGateway
 from app.services.manager_surface import ManagerSurfaceService
 from app.services.navigation import NavigationService
+from app.services.order_actions import HandoffTargets
 from app.services.notifications import (
     ManagerBotNotificationSink,
     ManagerNotificationService,
@@ -99,6 +100,11 @@ def create_app() -> FastAPI:
         ),
         navigation_service=NavigationService(),
         panel_manager=PanelManager(),
+        handoff_targets=HandoffTargets(
+            production_chat_id=settings.handoff_production_chat_id,
+            warehouse_chat_id=settings.handoff_warehouse_chat_id,
+            accountant_chat_id=settings.handoff_accountant_chat_id,
+        ),
     )
     dp.include_router(router)
 
