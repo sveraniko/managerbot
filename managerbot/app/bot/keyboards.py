@@ -30,7 +30,28 @@ def case_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="Claim / Take into work", callback_data=MBCallback(action="claim").pack())],
+            [InlineKeyboardButton(text="Reply to customer", callback_data=MBCallback(action="reply_start").pack())],
+            [InlineKeyboardButton(text="Add internal note", callback_data=MBCallback(action="note_start").pack())],
             [InlineKeyboardButton(text="Refresh", callback_data=MBCallback(action="refresh", value="case").pack())],
             [InlineKeyboardButton(text="Back", callback_data=MBCallback(action="back").pack()), InlineKeyboardButton(text="Home", callback_data=MBCallback(action="home").pack())],
+        ]
+    )
+
+
+def compose_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Cancel", callback_data=MBCallback(action="compose_cancel").pack())],
+            [InlineKeyboardButton(text="Back to case", callback_data=MBCallback(action="compose_back_case").pack())],
+        ]
+    )
+
+
+def reply_preview_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Confirm send", callback_data=MBCallback(action="reply_confirm").pack())],
+            [InlineKeyboardButton(text="Edit", callback_data=MBCallback(action="reply_edit").pack())],
+            [InlineKeyboardButton(text="Cancel", callback_data=MBCallback(action="compose_cancel").pack())],
         ]
     )

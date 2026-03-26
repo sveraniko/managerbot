@@ -24,3 +24,4 @@ def test_home_queue_back_refresh_state_determinism() -> None:
     assert state.panel_key == "hub:home"
     assert state.queue_key is None
     assert state.selected_case_id is None
+    assert state.compose_mode is None

@@ -15,6 +15,7 @@ from app.db.session import build_engine, build_session_factory
 from app.logging import configure_logging
 from app.repositories.sql import SqlActorRepository, SqlCaseRepository, SqlPresenceRepository, SqlQueueRepository
 from app.services.access import AccessService
+from app.services.delivery import TelegramCustomerDeliveryGateway
 from app.services.manager_surface import ManagerSurfaceService
 from app.services.navigation import NavigationService
 from app.state.manager_session import RedisManagerSessionStore
@@ -33,6 +34,7 @@ def create_app() -> FastAPI:
     redis = Redis.from_url(settings.redis_dsn, decode_responses=True)
 
     bot = Bot(token=settings.bot_token)
+    customer_bot = Bot(token=settings.customer_bot_token)
     dp = Dispatcher()
 
     actor_repo = SqlActorRepository(session_factory)
@@ -44,7 +46,13 @@ def create_app() -> FastAPI:
     router = build_router(
         access_service=AccessService(actor_repo),
         session_store=session_store,
-        surface_service=ManagerSurfaceService(queue_repo, case_repo, presence_repo, page_size=settings.queue_page_size),
+        surface_service=ManagerSurfaceService(
+            queue_repo,
+            case_repo,
+            presence_repo,
+            delivery_gateway=TelegramCustomerDeliveryGateway(customer_bot),
+            page_size=settings.queue_page_size,
+        ),
         navigation_service=NavigationService(),
         panel_manager=PanelManager(),
     )
@@ -52,6 +60,7 @@ def create_app() -> FastAPI:
 
     app.state.bot = bot
     app.state.dispatcher = dp
+    app.state.customer_bot = customer_bot
     app.state.redis = redis
     app.state.engine = engine
     app.state.polling_task = None
@@ -75,6 +84,7 @@ def create_app() -> FastAPI:
                 await task
         await dp.storage.close()
         await bot.session.close()
+        await customer_bot.session.close()
         await redis.close()
         await engine.dispose()
 

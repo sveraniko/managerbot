@@ -2,14 +2,23 @@ from __future__ import annotations
 
 from app.models import CaseDetail, ManagerActor, PresenceStatus, QueueItem
 from app.repositories.contracts import CaseRepository, PresenceRepository, QueueRepository
+from app.services.delivery import CustomerDeliveryGateway
 from app.state.manager_session import ManagerSessionState
 
 
 class ManagerSurfaceService:
-    def __init__(self, queue_repo: QueueRepository, case_repo: CaseRepository, presence_repo: PresenceRepository, page_size: int = 5) -> None:
+    def __init__(
+        self,
+        queue_repo: QueueRepository,
+        case_repo: CaseRepository,
+        presence_repo: PresenceRepository,
+        delivery_gateway: CustomerDeliveryGateway,
+        page_size: int = 5,
+    ) -> None:
         self._queue_repo = queue_repo
         self._case_repo = case_repo
         self._presence_repo = presence_repo
+        self._delivery_gateway = delivery_gateway
         self._page_size = page_size
 
     async def hub_view(self, actor: ManagerActor) -> tuple[PresenceStatus, dict[str, int]]:
@@ -33,3 +42,30 @@ class ManagerSurfaceService:
 
     async def claim_case(self, actor: ManagerActor, case_id) -> bool:
         return await self._case_repo.claim_case(case_id, actor.actor_id)
+
+    async def save_internal_note(self, actor: ManagerActor, case_id, body_text: str) -> bool:
+        return await self._case_repo.add_internal_note(case_id, actor.actor_id, body_text)
+
+    async def send_reply(self, actor: ManagerActor, case_id, body_text: str) -> str:
+        created = await self._case_repo.create_outbound_reply(case_id, actor.actor_id, body_text)
+        if not created:
+            return "Reply could not be sent: missing customer delivery target."
+        thread_entry_id, attempt_id, chat_id = created
+        result = await self._delivery_gateway.send_text(chat_id, body_text)
+        if result.ok:
+            await self._case_repo.mark_reply_delivery(
+                thread_entry_id,
+                attempt_id,
+                "sent",
+                telegram_message_id=result.telegram_message_id,
+                error_message=None,
+            )
+            return "Reply sent to customer."
+        await self._case_repo.mark_reply_delivery(
+            thread_entry_id,
+            attempt_id,
+            "failed",
+            telegram_message_id=None,
+            error_message=result.error_message,
+        )
+        return "Reply saved, but delivery failed."

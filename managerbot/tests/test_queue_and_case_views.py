@@ -4,9 +4,21 @@ from uuid import uuid4
 
 from app.models import CaseDetail, ManagerActor, QueueItem, SystemRole, ThreadEntry
 from app.repositories.fakes import FakeCaseRepository, FakePresenceRepository, FakeQueueRepository
+from app.services.delivery import DeliveryResult
 from app.services.manager_surface import ManagerSurfaceService
 from app.services.rendering import render_case_detail, render_queue
 from app.state.manager_session import ManagerSessionState
+
+
+class FakeDeliveryGateway:
+    def __init__(self, ok: bool = True) -> None:
+        self.ok = ok
+
+    async def send_text(self, chat_id: int, text: str) -> DeliveryResult:
+        _ = (chat_id, text)
+        if self.ok:
+            return DeliveryResult(ok=True, telegram_message_id=77)
+        return DeliveryResult(ok=False, error_message="boom")
 
 
 def test_queue_rendering_stable_numbers_and_order() -> None:
@@ -15,7 +27,13 @@ def test_queue_rendering_stable_numbers_and_order() -> None:
         QueueItem(uuid4(), 101, "Acme", "new", "none", None, "urgent", 1, datetime.now(timezone.utc)),
         QueueItem(uuid4(), 102, "Beta", "active", "waiting_manager", actor.actor_id, "normal", 0, datetime.now(timezone.utc)),
     ]
-    service = ManagerSurfaceService(FakeQueueRepository({"new": items}), FakeCaseRepository({}), FakePresenceRepository(), page_size=2)
+    service = ManagerSurfaceService(
+        FakeQueueRepository({"new": items}),
+        FakeCaseRepository({}),
+        FakePresenceRepository(),
+        delivery_gateway=FakeDeliveryGateway(),
+        page_size=2,
+    )
     state = ManagerSessionState(queue_key="new", queue_offset=0)
 
     page = asyncio.run(service.queue_page(actor, state))
@@ -42,10 +60,17 @@ def test_case_detail_render_read_only_and_claim_updates() -> None:
         thread_entries=[ThreadEntry("customer", "Need update", datetime.now(timezone.utc))],
     )
     cases = FakeCaseRepository({case_id: detail})
-    service = ManagerSurfaceService(FakeQueueRepository({}), cases, FakePresenceRepository(), page_size=2)
+    service = ManagerSurfaceService(
+        FakeQueueRepository({}),
+        cases,
+        FakePresenceRepository(),
+        delivery_gateway=FakeDeliveryGateway(),
+        page_size=2,
+    )
 
     before = render_case_detail(detail)
-    assert "Thread (read-only):" in before
+    assert "Customer thread:" in before
+    assert "Internal notes:" in before
     assert "Case #777" in before
     assert "Order #88" in before
 
@@ -56,3 +81,36 @@ def test_case_detail_render_read_only_and_claim_updates() -> None:
     assert updated is not None
     assert updated.assignment_label == "Assigned to me"
     assert updated.operational_status == "active"
+
+
+def test_reply_send_updates_delivery_status_and_note_is_internal_only() -> None:
+    actor = ManagerActor(uuid4(), 1, "Manager", SystemRole.MANAGER)
+    case_id = uuid4()
+    detail = CaseDetail(
+        case_id=case_id,
+        case_display_number=500,
+        commercial_status="open",
+        operational_status="active",
+        waiting_state="waiting_manager",
+        priority="normal",
+        escalation_level=0,
+        assignment_label="Assigned to me",
+        linked_quote_display_number=500,
+    )
+    repo = FakeCaseRepository({case_id: detail})
+    service = ManagerSurfaceService(
+        FakeQueueRepository({}),
+        repo,
+        FakePresenceRepository(),
+        delivery_gateway=FakeDeliveryGateway(ok=False),
+        page_size=2,
+    )
+
+    send_notice = asyncio.run(service.send_reply(actor, case_id, "We are checking this now."))
+    assert "delivery failed" in send_notice.lower()
+
+    asyncio.run(service.save_internal_note(actor, case_id, "Internal follow-up only"))
+    rendered = render_case_detail(detail)
+    assert "Internal follow-up only" in rendered
+    assert "We are checking this now." in rendered
+    assert "[failed]" in rendered
