@@ -1,4 +1,5 @@
 from app.models import CaseDetail, ManagerActor, PresenceStatus, QueueItem
+from app.services.sla import SlaService
 
 
 def render_hub(actor: ManagerActor, presence: PresenceStatus, counts: dict[str, int]) -> str:
@@ -12,15 +13,19 @@ def render_hub(actor: ManagerActor, presence: PresenceStatus, counts: dict[str, 
         f"Waiting for me: {counts.get('waiting_me', 0)}\\n"
         f"Waiting for customer: {counts.get('waiting_customer', 0)}\\n"
         f"Urgent: {counts.get('urgent', 0)}\\n"
-        f"Escalated: {counts.get('escalated', 0)}"
+        f"Escalated: {counts.get('escalated', 0)}\\n"
+        f"SLA near: {counts.get('sla_near', 0)}\\n"
+        f"SLA overdue: {counts.get('sla_overdue', 0)}"
     )
 
 
 def render_queue(queue_key: str, items: list[QueueItem], offset: int) -> str:
+    sla = SlaService()
     lines = [f"Queue: {queue_key}", f"Offset: {offset}", ""]
     for item in items:
+        sla_state = sla.classify(item.sla_due_at)
         lines.append(
-            f"#{item.case_display_number} | {item.customer_label or '-'} | {item.operational_status}/{item.waiting_state} | p:{item.priority} e:{item.escalation_level}"
+            f"#{item.case_display_number} | {item.customer_label or '-'} | {item.operational_status}/{item.waiting_state} | sla:{sla_state} | p:{item.priority} e:{item.escalation_level}"
         )
     if not items:
         lines.append("No cases in this queue.")
@@ -28,6 +33,7 @@ def render_queue(queue_key: str, items: list[QueueItem], offset: int) -> str:
 
 
 def render_case_detail(detail: CaseDetail) -> str:
+    sla_state = SlaService().classify(detail.sla_due_at)
     head = [
         f"Case #{detail.case_display_number}",
         f"Commercial: {detail.commercial_status}",
@@ -35,6 +41,7 @@ def render_case_detail(detail: CaseDetail) -> str:
         f"Waiting: {detail.waiting_state}",
         f"Assignment: {detail.assignment_label}",
         f"Priority/Escalation: {detail.priority}/{detail.escalation_level}",
+        f"SLA: {sla_state}",
         f"Quote #{detail.linked_quote_display_number}",
     ]
     if detail.linked_order_display_number:

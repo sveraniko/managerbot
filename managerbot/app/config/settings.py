@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     redis_dsn: str = Field(default="redis://localhost:6379/0")
     log_level: str = Field(default="INFO")
     queue_page_size: int = Field(default=5)
+    notification_poll_seconds: int = Field(default=20)
+    notification_dedupe_ttl_seconds: int = Field(default=3600)
 
 
 def get_settings() -> Settings:

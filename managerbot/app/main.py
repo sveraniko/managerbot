@@ -13,11 +13,18 @@ from app.bot.panel_manager import PanelManager
 from app.config.settings import get_settings
 from app.db.session import build_engine, build_session_factory
 from app.logging import configure_logging
-from app.repositories.sql import SqlActorRepository, SqlCaseRepository, SqlPresenceRepository, SqlQueueRepository
+from app.repositories.sql import SqlActorRepository, SqlCaseRepository, SqlNotificationRepository, SqlPresenceRepository, SqlQueueRepository
 from app.services.access import AccessService
 from app.services.delivery import TelegramCustomerDeliveryGateway
 from app.services.manager_surface import ManagerSurfaceService
 from app.services.navigation import NavigationService
+from app.services.notifications import (
+    ManagerBotNotificationSink,
+    ManagerNotificationService,
+    NotificationPolicy,
+    RedisNotificationDedupeStore,
+    run_notification_loop,
+)
 from app.state.manager_session import RedisManagerSessionStore
 
 logger = structlog.get_logger(__name__)
@@ -64,6 +71,8 @@ def create_app() -> FastAPI:
     app.state.redis = redis
     app.state.engine = engine
     app.state.polling_task = None
+    app.state.notification_task = None
+    app.state.notification_stop_event = asyncio.Event()
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
@@ -73,11 +82,26 @@ def create_app() -> FastAPI:
     async def on_startup() -> None:
         logger.info("managerbot_startup")
         app.state.polling_task = asyncio.create_task(dp.start_polling(bot, handle_signals=False))
+        notification_service = ManagerNotificationService(
+            events_repo=SqlNotificationRepository(session_factory),
+            recipients=actor_repo,
+            sink=ManagerBotNotificationSink(bot),
+            dedupe=RedisNotificationDedupeStore(redis),
+            policy=NotificationPolicy(dedupe_ttl_seconds=settings.notification_dedupe_ttl_seconds),
+        )
+        app.state.notification_task = asyncio.create_task(
+            run_notification_loop(notification_service, settings.notification_poll_seconds, app.state.notification_stop_event)
+        )
 
     @app.on_event("shutdown")
     async def on_shutdown() -> None:
         logger.info("managerbot_shutdown")
         task = app.state.polling_task
+        app.state.notification_stop_event.set()
+        notify_task = app.state.notification_task
+        if notify_task:
+            with suppress(asyncio.CancelledError):
+                await notify_task
         if task:
             task.cancel()
             with suppress(asyncio.CancelledError):

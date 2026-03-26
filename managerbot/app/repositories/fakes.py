@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 from uuid import uuid4
 
-from app.models import CaseDetail, ManagerActor, PresenceStatus, QueueItem, ThreadEntry
+from app.models import CaseDetail, ManagerActor, NotificationEvent, PresenceStatus, QueueItem, ThreadEntry
 
 
 class FakeActorRepository:
@@ -13,6 +13,12 @@ class FakeActorRepository:
 
     async def by_telegram_user_id(self, telegram_user_id: int):
         return self.actors.get(telegram_user_id)
+
+    async def list_internal_recipients(self) -> list[tuple[str, int, str, str]]:
+        return [
+            (str(actor.actor_id), actor.telegram_user_id, actor.role.value, PresenceStatus.ONLINE.value)
+            for actor in self.actors.values()
+        ]
 
 
 class FakePresenceRepository:
@@ -54,6 +60,16 @@ class FakeCaseRepository:
         detail.thread_entries.append(ThreadEntry(direction="system", body="Case claimed", created_at=datetime.now(timezone.utc)))
         return True
 
+    async def escalate_to_owner(self, case_id: UUID, actor_id: UUID):
+        detail = self.details.get(case_id)
+        if not detail:
+            return False
+        detail.escalation_level = 1
+        detail.priority = "high"
+        detail.waiting_state = "waiting_owner"
+        detail.assignment_label = "Owner"
+        return True
+
     async def add_internal_note(self, case_id: UUID, actor_id: UUID, body_text: str):
         detail = self.details.get(case_id)
         if not detail:
@@ -87,3 +103,11 @@ class FakeCaseRepository:
         for detail in self.details.values():
             if detail.thread_entries:
                 detail.thread_entries[-1].delivery_status = status
+
+
+class FakeNotificationRepository:
+    def __init__(self, events: list[NotificationEvent]) -> None:
+        self.events = events
+
+    async def poll_events(self) -> list[NotificationEvent]:
+        return list(self.events)

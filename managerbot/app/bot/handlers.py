@@ -132,6 +132,13 @@ def build_router(
                 detail = await surface_service.case_detail(actor, state.selected_case_id)
                 if detail:
                     await panel_manager.render(msg, render_case_detail(detail), case_keyboard())
+        elif callback_data.action == "escalate_owner":
+            if state.selected_case_id:
+                ok = await surface_service.escalate_to_owner(actor, state.selected_case_id)
+                detail = await surface_service.case_detail(actor, state.selected_case_id)
+                if detail:
+                    prefix = "Escalated to owner.\n\n" if ok else "Escalation failed.\n\n"
+                    await panel_manager.render(msg, prefix + render_case_detail(detail), case_keyboard())
         elif callback_data.action == "reply_start":
             if not state.selected_case_id:
                 await callback.answer("Open a case first", show_alert=True)
@@ -179,6 +186,7 @@ def build_router(
                 presence, counts = await surface_service.hub_view(actor)
                 await panel_manager.render(msg, render_hub(actor, presence, counts), hub_keyboard())
         elif callback_data.action == "compose_back_case":
+            compose_service.back_to_case(state)
             detail = await surface_service.case_detail(actor, state.selected_case_id) if state.selected_case_id else None
             if detail:
                 await panel_manager.render(msg, render_case_detail(detail), case_keyboard())
