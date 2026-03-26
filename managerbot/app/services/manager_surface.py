@@ -58,9 +58,19 @@ class ManagerSurfaceService:
     async def case_detail(self, actor: ManagerActor, case_id) -> CaseDetail | None:
         return await self._case_repo.get_detail(case_id, actor.actor_id)
 
+    async def set_presence(self, actor: ManagerActor, status: PresenceStatus) -> PresenceStatus:
+        await self._presence_repo.set_status(actor.actor_id, status)
+        return status
+
     async def toggle_presence(self, actor: ManagerActor) -> PresenceStatus:
+        _cycle = {
+            PresenceStatus.ONLINE: PresenceStatus.AWAY,
+            PresenceStatus.AWAY: PresenceStatus.OFFLINE,
+            PresenceStatus.OFFLINE: PresenceStatus.ONLINE,
+            PresenceStatus.BUSY: PresenceStatus.OFFLINE,
+        }
         current = await self._presence_repo.get_status(actor.actor_id)
-        nxt = PresenceStatus.AWAY if current == PresenceStatus.ONLINE else PresenceStatus.ONLINE
+        nxt = _cycle.get(current, PresenceStatus.ONLINE)
         await self._presence_repo.set_status(actor.actor_id, nxt)
         return nxt
 

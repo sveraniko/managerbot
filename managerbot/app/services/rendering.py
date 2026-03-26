@@ -8,44 +8,46 @@ from app.services.sla import SlaService
 
 
 def render_hub(actor: ManagerActor, presence: PresenceStatus, counts: dict[str, int], buckets: list[HotTaskBucket]) -> str:
-    attention_load = len([bucket for bucket in buckets if bucket.items])
-    lines = [
-        "ManagerBot Workdesk",
-        f"Manager: {actor.display_name} ({actor.role.value})",
-        f"Presence: {presence.value}",
-        (
-            f"Attention: buckets {attention_load}/5 | "
-            f"overdue {counts.get('sla_overdue', 0)} | failed {len(_bucket_items(buckets, 'failed_delivery'))} | "
-            f"new {counts.get('new', 0)}"
-        ),
-        "",
-        "Hot tasks",
-    ]
-    if attention_load == 0:
-        lines.append("- No hot tasks now.")
-    for bucket in buckets:
-        lines.append(f"{bucket.title}: {len(bucket.items)}")
-        if not bucket.items:
-            lines.append("- none")
-            continue
-        for item in bucket.items:
-            lines.append(f"- {_render_hot_task_item(item)}")
+    presence_label = {
+        "online": "🟢 Online",
+        "busy": "🟠 Busy",
+        "offline": "⚫ Offline",
+    }.get(presence.value, presence.value)
 
-    lines.extend(
-        [
-            "",
-            "Queue summary",
-            f"New/Unassigned: {counts.get('new', 0)}",
-            f"Assigned to me: {counts.get('mine', 0)}",
-            f"Waiting for me: {counts.get('waiting_me', 0)}",
-            f"Waiting for customer: {counts.get('waiting_customer', 0)}",
-            f"Urgent: {counts.get('urgent', 0)}",
-            f"Escalated: {counts.get('escalated', 0)}",
-            f"SLA near: {counts.get('sla_near', 0)}",
-            f"SLA overdue: {counts.get('sla_overdue', 0)}",
-        ]
-    )
-    return "\\n".join(lines)
+    lines = [
+        "ManagerBot",
+        f"{actor.display_name} · {actor.role.value}",
+        f"Presence: {presence_label}",
+        "",
+        "🔥 Hot tasks",
+    ]
+
+    any_hot = any(bucket.items for bucket in buckets)
+    if not any_hot:
+        lines.append("All clear — no urgent items.")
+    else:
+        for bucket in buckets:
+            count = len(bucket.items)
+            if count == 0:
+                lines.append(f"· {bucket.title}: 0")
+            else:
+                lines.append(f"🔴 {bucket.title}: {count}")
+                for item in bucket.items[:3]:
+                    lines.append(f"  — #{item.case_display_number} {item.customer_label or '—'}: {item.reason}")
+                if count > 3:
+                    lines.append(f"  … and {count - 3} more")
+
+    lines.extend([
+        "",
+        "📋 Queue summary",
+        f"New/Unassigned:    {counts.get('new', 0)}",
+        f"Assigned to me:    {counts.get('mine', 0)}",
+        f"Waiting for me:    {counts.get('waiting_me', 0)}",
+        f"Waiting customer:  {counts.get('waiting_customer', 0)}",
+        f"Urgent:            {counts.get('urgent', 0)}",
+        f"Escalated:         {counts.get('escalated', 0)}",
+    ])
+    return "\n".join(lines)
 
 
 def render_queue(queue_key: str, items: list[QueueItem], offset: int, filters: QueueFilters | None = None) -> str:
@@ -63,7 +65,7 @@ def render_queue(queue_key: str, items: list[QueueItem], offset: int, filters: Q
     if not items:
         lines.append("No cases in this queue.")
         lines.append("Try another lane or adjust filters.")
-    return "\\n".join(lines)
+    return "\n".join(lines)
 
 
 def render_case_detail(
@@ -156,7 +158,7 @@ def render_case_detail(
         head.append(confidence_line)
     else:
         head.append("- No recommendation yet. Tap AI Analyze + Recommend.")
-    return "\\n".join(head)
+    return "\n".join(head)
 
 
 def render_order_summary_panel(detail: CaseDetail, *, configured_targets: dict[str, bool]) -> str:
@@ -189,7 +191,7 @@ def render_order_summary_panel(detail: CaseDetail, *, configured_targets: dict[s
     lines.append(f"- Accountant: {'configured' if configured_targets.get('accountant') else 'not configured'}")
     lines.append("")
     lines.append("Use compact summary send/handoff actions below.")
-    return "\\n".join(lines)
+    return "\n".join(lines)
 
 
 def render_contact_actions_panel(detail: CaseDetail) -> str:

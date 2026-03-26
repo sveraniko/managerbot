@@ -80,8 +80,8 @@ class SqlPresenceRepository:
             await session.execute(
                 text(
                     """
-                    insert into ops.manager_presence_states(actor_id,presence_status,updated_at,created_at)
-                    values (:actor_id,:status,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+                    insert into ops.manager_presence_states(id,actor_id,presence_status,updated_at,created_at)
+                    values (gen_random_uuid(),:actor_id,:status,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
                     on conflict (actor_id) do update set presence_status=:status, updated_at=CURRENT_TIMESTAMP
                     """
                 ),

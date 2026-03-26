@@ -122,6 +122,8 @@ def build_router(
         state.panel_key = "hub:home"
         state.queue_offset = 0
         await session_store.set(message.from_user.id, state)
+        from app.models import PresenceStatus
+        await surface_service.set_presence(actor, PresenceStatus.OFFLINE)
         presence, counts, buckets = await surface_service.hub_view(actor)
         await panel_manager.render(message, render_hub(actor, presence, counts, buckets), hub_keyboard(buckets))
 
