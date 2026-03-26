@@ -23,6 +23,9 @@ class ManagerSessionState:
     compose_mode: str | None = None
     compose_case_id: UUID | None = None
     compose_draft_text: str | None = None
+    ai_case_id: UUID | None = None
+    ai_analysis: dict[str, Any] | None = None
+    ai_error: str | None = None
 
 
 class ManagerSessionStore(Protocol):
@@ -48,6 +51,8 @@ class RedisManagerSessionStore:
             payload["selected_case_id"] = UUID(payload["selected_case_id"])
         if payload.get("compose_case_id"):
             payload["compose_case_id"] = UUID(payload["compose_case_id"])
+        if payload.get("ai_case_id"):
+            payload["ai_case_id"] = UUID(payload["ai_case_id"])
         return ManagerSessionState(**payload)
 
     async def set(self, telegram_user_id: int, state: ManagerSessionState) -> None:
@@ -56,6 +61,8 @@ class RedisManagerSessionStore:
             payload["selected_case_id"] = str(payload["selected_case_id"])
         if payload["compose_case_id"]:
             payload["compose_case_id"] = str(payload["compose_case_id"])
+        if payload["ai_case_id"]:
+            payload["ai_case_id"] = str(payload["ai_case_id"])
         await self._redis.set(self._key(telegram_user_id), json.dumps(payload))
 
 

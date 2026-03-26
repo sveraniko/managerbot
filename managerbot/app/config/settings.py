@@ -13,6 +13,14 @@ class Settings(BaseSettings):
     queue_page_size: int = Field(default=5)
     notification_poll_seconds: int = Field(default=20)
     notification_dedupe_ttl_seconds: int = Field(default=3600)
+    ai_reader_enabled: bool = Field(default=False)
+    ai_api_key: str | None = Field(default=None)
+    ai_base_url: str = Field(default="https://api.openai.com/v1")
+    ai_model: str = Field(default="gpt-4.1-mini")
+    ai_timeout_seconds: float = Field(default=12.0)
+    ai_max_input_chars: int = Field(default=6000)
+    ai_max_output_tokens: int = Field(default=500)
+    ai_include_internal_notes: bool = Field(default=True)
 
 
 def get_settings() -> Settings:

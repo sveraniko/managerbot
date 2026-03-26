@@ -1,4 +1,5 @@
 from app.models import CaseDetail, ManagerActor, PresenceStatus, QueueItem
+from app.services.ai_reader import AIReaderAnalysis
 from app.services.sla import SlaService
 
 
@@ -32,7 +33,12 @@ def render_queue(queue_key: str, items: list[QueueItem], offset: int) -> str:
     return "\\n".join(lines)
 
 
-def render_case_detail(detail: CaseDetail) -> str:
+def render_case_detail(
+    detail: CaseDetail,
+    *,
+    ai_analysis: AIReaderAnalysis | None = None,
+    ai_error: str | None = None,
+) -> str:
     sla_state = SlaService().classify(detail.sla_due_at)
     head = [
         f"Case #{detail.case_display_number}",
@@ -63,4 +69,22 @@ def render_case_detail(detail: CaseDetail) -> str:
             head.append(f"- {note.author_label}: {note.body}")
     else:
         head.append("- none")
+    head.append("\nAI reader (advisory only):")
+    if ai_error:
+        head.append(f"- unavailable: {ai_error}")
+    elif ai_analysis:
+        head.append(f"- Summary: {ai_analysis.summary}")
+        head.append(f"- Customer intent: {ai_analysis.customer_intent}")
+        if ai_analysis.risk_flags:
+            head.append(f"- Risk flags: {', '.join(ai_analysis.risk_flags)}")
+        else:
+            head.append("- Risk flags: none")
+        if ai_analysis.missing_information:
+            head.append(f"- Missing info: {', '.join(ai_analysis.missing_information)}")
+        else:
+            head.append("- Missing info: none")
+        head.append(f"- Recommended next step: {ai_analysis.recommended_next_step}")
+        head.append(f"- Confidence: {ai_analysis.confidence:.2f}")
+    else:
+        head.append("- No AI analysis yet. Tap AI Analyze.")
     return "\\n".join(head)

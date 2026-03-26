@@ -33,6 +33,7 @@ def case_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Escalate to owner", callback_data=MBCallback(action="escalate_owner").pack())],
             [InlineKeyboardButton(text="Reply to customer", callback_data=MBCallback(action="reply_start").pack())],
             [InlineKeyboardButton(text="Add internal note", callback_data=MBCallback(action="note_start").pack())],
+            [InlineKeyboardButton(text="AI Analyze / Refresh", callback_data=MBCallback(action="ai_analyze").pack())],
             [InlineKeyboardButton(text="Refresh", callback_data=MBCallback(action="refresh", value="case").pack())],
             [InlineKeyboardButton(text="Back", callback_data=MBCallback(action="back").pack()), InlineKeyboardButton(text="Home", callback_data=MBCallback(action="home").pack())],
         ]

@@ -15,6 +15,7 @@ from app.db.session import build_engine, build_session_factory
 from app.logging import configure_logging
 from app.repositories.sql import SqlActorRepository, SqlCaseRepository, SqlNotificationRepository, SqlPresenceRepository, SqlQueueRepository
 from app.services.access import AccessService
+from app.services.ai_reader import AIReaderConfig, AIReaderService, OpenAIChatCompletionsClient
 from app.services.delivery import TelegramCustomerDeliveryGateway
 from app.services.manager_surface import ManagerSurfaceService
 from app.services.navigation import NavigationService
@@ -58,6 +59,19 @@ def create_app() -> FastAPI:
             case_repo,
             presence_repo,
             delivery_gateway=TelegramCustomerDeliveryGateway(customer_bot),
+            ai_reader=AIReaderService(
+                AIReaderConfig(
+                    enabled=settings.ai_reader_enabled,
+                    model=settings.ai_model,
+                    timeout_seconds=settings.ai_timeout_seconds,
+                    max_input_chars=settings.ai_max_input_chars,
+                    max_output_tokens=settings.ai_max_output_tokens,
+                    include_internal_notes=settings.ai_include_internal_notes,
+                ),
+                OpenAIChatCompletionsClient(settings.ai_api_key, settings.ai_base_url)
+                if settings.ai_reader_enabled and settings.ai_api_key
+                else None,
+            ),
             page_size=settings.queue_page_size,
         ),
         navigation_service=NavigationService(),

@@ -16,6 +16,9 @@ class NavigationService:
         state.compose_mode = None
         state.compose_case_id = None
         state.compose_draft_text = None
+        state.ai_case_id = None
+        state.ai_analysis = None
+        state.ai_error = None
         return state
 
     def back(self, state: ManagerSessionState) -> ManagerSessionState:

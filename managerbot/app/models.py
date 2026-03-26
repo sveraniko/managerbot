@@ -95,6 +95,7 @@ class CaseDetail:
     sla_due_at: datetime | None = None
     linked_order_display_number: int | None = None
     linked_quote_display_number: int | None = None
+    customer_label: str | None = None
     thread_entries: list[ThreadEntry] = field(default_factory=list)
     internal_notes: list[InternalNote] = field(default_factory=list)
     last_delivery: DeliverySnapshot | None = None
