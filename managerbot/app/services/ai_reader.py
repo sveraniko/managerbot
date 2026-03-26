@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Protocol
@@ -10,6 +12,7 @@ import structlog
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from app.models import CaseDetail
+from app.services.ai_cache import InMemoryAICache
 
 logger = structlog.get_logger(__name__)
 
@@ -56,6 +59,8 @@ class AIReaderResult:
     analysis: AIReaderAnalysis | None = None
     error_message: str | None = None
     model: str | None = None
+    prompt_version: str | None = None
+    from_cache: bool = False
 
 
 class AIReaderClient(Protocol):
@@ -117,27 +122,39 @@ class OpenAIChatCompletionsClient:
 class AIReaderConfig:
     enabled: bool
     model: str
+    prompt_version: str
     timeout_seconds: float
     max_input_chars: int
     max_output_tokens: int
     include_internal_notes: bool
+    max_thread_entries: int
+    max_internal_notes: int
 
 
 class CaseAIPacketBuilder:
-    def __init__(self, *, max_input_chars: int, include_internal_notes: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        max_input_chars: int,
+        include_internal_notes: bool = True,
+        max_thread_entries: int = 6,
+        max_internal_notes: int = 3,
+    ) -> None:
         self._max_input_chars = max_input_chars
         self._include_internal_notes = include_internal_notes
+        self._max_thread_entries = max(0, max_thread_entries)
+        self._max_internal_notes = max(0, max_internal_notes)
 
     def build(self, detail: CaseDetail, *, sla_state: str) -> AIReaderPacket:
         thread_lines = [
-            self._clip(f"{entry.direction}: {entry.body}", 280)
-            for entry in detail.thread_entries[-6:]
+            self._clip(self._sanitize(f"{entry.direction}: {entry.body}"), 280)
+            for entry in detail.thread_entries[-self._max_thread_entries :]
         ]
         note_lines: list[str] = []
-        if self._include_internal_notes:
+        if self._include_internal_notes and self._max_internal_notes > 0:
             note_lines = [
-                self._clip(f"{note.author_label}: {note.body}", 240)
-                for note in detail.internal_notes[-3:]
+                self._clip(self._sanitize(f"{note.author_label}: {note.body}"), 240)
+                for note in detail.internal_notes[-self._max_internal_notes :]
             ]
         packet = AIReaderPacket(
             case_id=str(detail.case_id),
@@ -159,14 +176,19 @@ class CaseAIPacketBuilder:
         return self._truncate_packet(packet)
 
     def _truncate_packet(self, packet: AIReaderPacket) -> AIReaderPacket:
-        raw = packet.model_dump_json()
-        if len(raw) <= self._max_input_chars:
-            return packet
         trimmed = packet.model_copy(deep=True)
         while len(trimmed.model_dump_json()) > self._max_input_chars and trimmed.customer_thread_recent:
             trimmed.customer_thread_recent.pop(0)
         while len(trimmed.model_dump_json()) > self._max_input_chars and trimmed.internal_notes_recent:
             trimmed.internal_notes_recent.pop(0)
+        while len(trimmed.model_dump_json()) > self._max_input_chars and any(
+            len(x) > 80 for x in trimmed.customer_thread_recent
+        ):
+            trimmed.customer_thread_recent = [self._clip(x, max(80, len(x) - 40)) for x in trimmed.customer_thread_recent]
+        while len(trimmed.model_dump_json()) > self._max_input_chars and any(
+            len(x) > 80 for x in trimmed.internal_notes_recent
+        ):
+            trimmed.internal_notes_recent = [self._clip(x, max(80, len(x) - 30)) for x in trimmed.internal_notes_recent]
         return trimmed
 
     @staticmethod
@@ -175,33 +197,61 @@ class CaseAIPacketBuilder:
             return text
         return text[: limit - 1] + "…"
 
+    @staticmethod
+    def _sanitize(text: str) -> str:
+        text = re.sub(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+", "[redacted-email]", text)
+        text = re.sub(r"\+?\d[\d\s\-()]{6,}\d", "[redacted-number]", text)
+        return text
+
 
 class AIReaderService:
-    def __init__(self, config: AIReaderConfig, client: AIReaderClient | None) -> None:
+    def __init__(self, config: AIReaderConfig, client: AIReaderClient | None, cache: InMemoryAICache | None = None) -> None:
         self._config = config
         self._client = client
+        self._cache = cache
         self._packet_builder = CaseAIPacketBuilder(
             max_input_chars=config.max_input_chars,
             include_internal_notes=config.include_internal_notes,
+            max_thread_entries=config.max_thread_entries,
+            max_internal_notes=config.max_internal_notes,
         )
 
-    async def analyze_case(self, detail: CaseDetail, *, sla_state: str) -> AIReaderResult:
+    async def analyze_case(self, detail: CaseDetail, *, sla_state: str, force_refresh: bool = False) -> AIReaderResult:
         if not self._config.enabled:
             return AIReaderResult(ok=False, error_message="AI reader is disabled.")
         if not self._client:
             return AIReaderResult(ok=False, error_message="AI provider is not configured.")
 
         packet = self._packet_builder.build(detail, sla_state=sla_state)
+        cache_key = self._cache_key(packet)
+        if self._cache and not force_refresh:
+            cached = self._cache.get(cache_key)
+            if cached:
+                try:
+                    analysis = AIReaderAnalysis.model_validate(cached["analysis"])
+                    return AIReaderResult(
+                        ok=True,
+                        analysis=analysis,
+                        model=self._config.model,
+                        prompt_version=self._config.prompt_version,
+                        from_cache=True,
+                    )
+                except Exception:
+                    logger.warning("ai_reader_cache_payload_invalid", case_id=str(detail.case_id))
+                    self._cache.delete(cache_key)
+
         logger.info(
             "ai_reader_case_analysis_started",
             case_id=str(detail.case_id),
             case_display_number=detail.case_display_number,
             model=self._config.model,
+            prompt_version=self._config.prompt_version,
+            force_refresh=force_refresh,
         )
         try:
             payload = await self._client.complete_json(
                 model=self._config.model,
-                system_prompt=_reader_system_prompt(),
+                system_prompt=_reader_system_prompt(self._config.prompt_version),
                 user_prompt=_reader_user_prompt(packet),
                 schema=AIReaderAnalysis.model_json_schema(),
                 timeout_seconds=self._config.timeout_seconds,
@@ -210,39 +260,54 @@ class AIReaderService:
             analysis = AIReaderAnalysis.model_validate(payload)
         except httpx.TimeoutException:
             logger.warning("ai_reader_case_analysis_timeout", case_id=str(detail.case_id), model=self._config.model)
-            return AIReaderResult(ok=False, error_message="AI timed out. Try refresh.", model=self._config.model)
+            return AIReaderResult(ok=False, error_message="AI timed out. Try refresh.", model=self._config.model, prompt_version=self._config.prompt_version)
         except httpx.HTTPError as exc:
             logger.warning(
                 "ai_reader_case_analysis_provider_error",
                 case_id=str(detail.case_id),
                 model=self._config.model,
+                prompt_version=self._config.prompt_version,
                 error=str(exc),
             )
-            return AIReaderResult(ok=False, error_message="AI is temporarily unavailable.", model=self._config.model)
+            return AIReaderResult(ok=False, error_message="AI is temporarily unavailable.", model=self._config.model, prompt_version=self._config.prompt_version)
         except (json.JSONDecodeError, ValidationError, KeyError, TypeError) as exc:
             logger.warning(
                 "ai_reader_case_analysis_parse_error",
                 case_id=str(detail.case_id),
                 model=self._config.model,
+                prompt_version=self._config.prompt_version,
                 error=str(exc),
             )
-            return AIReaderResult(ok=False, error_message="AI returned invalid analysis.", model=self._config.model)
+            return AIReaderResult(ok=False, error_message="AI returned invalid analysis.", model=self._config.model, prompt_version=self._config.prompt_version)
 
+        if self._cache:
+            self._cache.set(cache_key, {"analysis": analysis.model_dump(mode="json")})
         logger.info(
             "ai_reader_case_analysis_succeeded",
             case_id=str(detail.case_id),
             model=self._config.model,
+            prompt_version=self._config.prompt_version,
             generated_at=datetime.now(timezone.utc).isoformat(),
         )
-        return AIReaderResult(ok=True, analysis=analysis, model=self._config.model)
+        return AIReaderResult(
+            ok=True,
+            analysis=analysis,
+            model=self._config.model,
+            prompt_version=self._config.prompt_version,
+            from_cache=False,
+        )
 
     def build_packet(self, detail: CaseDetail, *, sla_state: str) -> AIReaderPacket:
         return self._packet_builder.build(detail, sla_state=sla_state)
 
+    def _cache_key(self, packet: AIReaderPacket) -> str:
+        digest = hashlib.sha256(json.dumps(packet.model_dump(mode="json"), sort_keys=True).encode("utf-8")).hexdigest()
+        return f"reader:{self._config.model}:{self._config.prompt_version}:{packet.case_id}:{digest}"
 
-def _reader_system_prompt() -> str:
+
+def _reader_system_prompt(prompt_version: str) -> str:
     return (
-        "You are ManagerBot AI Reader. "
+        f"You are ManagerBot AI Reader (prompt {prompt_version}). "
         "You are read-only and advisory. "
         "Use only provided case packet facts. "
         "Do not invent data, do not claim actions were taken, "

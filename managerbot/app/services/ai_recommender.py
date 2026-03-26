@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -10,6 +11,7 @@ import httpx
 import structlog
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
+from app.services.ai_cache import InMemoryAICache
 from app.services.ai_reader import AIReaderClient, AIReaderPacket
 
 logger = structlog.get_logger(__name__)
@@ -51,37 +53,60 @@ class AIRecommendationResult:
     recommendation: AIRecommendation | None = None
     error_message: str | None = None
     model: str | None = None
+    prompt_version: str | None = None
+    from_cache: bool = False
 
 
 @dataclass(slots=True)
 class AIRecommenderConfig:
     enabled: bool
     model: str
+    prompt_version: str
     timeout_seconds: float
     max_output_tokens: int
 
 
 class AIRecommenderService:
-    def __init__(self, config: AIRecommenderConfig, client: AIReaderClient | None) -> None:
+    def __init__(self, config: AIRecommenderConfig, client: AIReaderClient | None, cache: InMemoryAICache | None = None) -> None:
         self._config = config
         self._client = client
+        self._cache = cache
 
-    async def recommend(self, packet: AIReaderPacket) -> AIRecommendationResult:
+    async def recommend(self, packet: AIReaderPacket, *, force_refresh: bool = False) -> AIRecommendationResult:
         if not self._config.enabled:
             return AIRecommendationResult(ok=False, error_message="AI recommender is disabled.")
         if not self._client:
             return AIRecommendationResult(ok=False, error_message="AI provider is not configured.")
+
+        cache_key = self._cache_key(packet)
+        if self._cache and not force_refresh:
+            cached = self._cache.get(cache_key)
+            if cached:
+                try:
+                    recommendation = AIRecommendation.model_validate(cached["recommendation"])
+                    return AIRecommendationResult(
+                        ok=True,
+                        recommendation=recommendation,
+                        model=self._config.model,
+                        prompt_version=self._config.prompt_version,
+                        from_cache=True,
+                    )
+                except Exception:
+                    logger.warning("ai_recommender_cache_payload_invalid", case_id=packet.case_id)
+                    self._cache.delete(cache_key)
 
         logger.info(
             "ai_recommender_started",
             case_id=packet.case_id,
             case_display_number=packet.case_display_number,
             model=self._config.model,
+            prompt_version=self._config.prompt_version,
+            force_refresh=force_refresh,
         )
         try:
             payload = await self._client.complete_json(
                 model=self._config.model,
-                system_prompt=_recommender_system_prompt(),
+                system_prompt=_recommender_system_prompt(self._config.prompt_version),
                 user_prompt=_recommender_user_prompt(packet),
                 schema=AIRecommendation.model_json_schema(),
                 timeout_seconds=self._config.timeout_seconds,
@@ -90,36 +115,51 @@ class AIRecommenderService:
             recommendation = AIRecommendation.model_validate(payload)
         except httpx.TimeoutException:
             logger.warning("ai_recommender_timeout", case_id=packet.case_id, model=self._config.model)
-            return AIRecommendationResult(ok=False, error_message="AI recommender timed out. Try refresh.", model=self._config.model)
+            return AIRecommendationResult(ok=False, error_message="AI recommender timed out. Try refresh.", model=self._config.model, prompt_version=self._config.prompt_version)
         except httpx.HTTPError as exc:
             logger.warning(
                 "ai_recommender_provider_error",
                 case_id=packet.case_id,
                 model=self._config.model,
+                prompt_version=self._config.prompt_version,
                 error=str(exc),
             )
-            return AIRecommendationResult(ok=False, error_message="AI recommender is temporarily unavailable.", model=self._config.model)
+            return AIRecommendationResult(ok=False, error_message="AI recommender is temporarily unavailable.", model=self._config.model, prompt_version=self._config.prompt_version)
         except (json.JSONDecodeError, ValidationError, KeyError, TypeError) as exc:
             logger.warning(
                 "ai_recommender_parse_error",
                 case_id=packet.case_id,
                 model=self._config.model,
+                prompt_version=self._config.prompt_version,
                 error=str(exc),
             )
-            return AIRecommendationResult(ok=False, error_message="AI recommender returned invalid output.", model=self._config.model)
+            return AIRecommendationResult(ok=False, error_message="AI recommender returned invalid output.", model=self._config.model, prompt_version=self._config.prompt_version)
 
+        if self._cache:
+            self._cache.set(cache_key, {"recommendation": recommendation.model_dump(mode="json")})
         logger.info(
             "ai_recommender_succeeded",
             case_id=packet.case_id,
             model=self._config.model,
+            prompt_version=self._config.prompt_version,
             generated_at=datetime.now(timezone.utc).isoformat(),
         )
-        return AIRecommendationResult(ok=True, recommendation=recommendation, model=self._config.model)
+        return AIRecommendationResult(
+            ok=True,
+            recommendation=recommendation,
+            model=self._config.model,
+            prompt_version=self._config.prompt_version,
+            from_cache=False,
+        )
+
+    def _cache_key(self, packet: AIReaderPacket) -> str:
+        digest = hashlib.sha256(json.dumps(packet.model_dump(mode="json"), sort_keys=True).encode("utf-8")).hexdigest()
+        return f"recommender:{self._config.model}:{self._config.prompt_version}:{packet.case_id}:{digest}"
 
 
-def _recommender_system_prompt() -> str:
+def _recommender_system_prompt(prompt_version: str) -> str:
     return (
-        "You are ManagerBot AI Recommender. "
+        f"You are ManagerBot AI Recommender (prompt {prompt_version}). "
         "You are advisory-only and never execute actions. "
         "Use only the provided case packet facts and avoid invented events. "
         "Provide concise manager-ready recommendations, reply and internal note drafts, "

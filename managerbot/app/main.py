@@ -15,6 +15,7 @@ from app.db.session import build_engine, build_session_factory
 from app.logging import configure_logging
 from app.repositories.sql import SqlActorRepository, SqlCaseRepository, SqlNotificationRepository, SqlPresenceRepository, SqlQueueRepository
 from app.services.access import AccessService
+from app.services.ai_cache import InMemoryAICache
 from app.services.ai_reader import AIReaderConfig, AIReaderService, OpenAIChatCompletionsClient
 from app.services.ai_recommender import AIRecommenderConfig, AIRecommenderService
 from app.services.delivery import TelegramCustomerDeliveryGateway
@@ -54,9 +55,10 @@ def create_app() -> FastAPI:
 
     ai_client = (
         OpenAIChatCompletionsClient(settings.ai_api_key, settings.ai_base_url)
-        if settings.ai_api_key
+        if settings.ai_enabled and settings.ai_api_key
         else None
     )
+    ai_cache = InMemoryAICache(settings.ai_cache_ttl_seconds)
 
     router = build_router(
         access_service=AccessService(actor_repo),
@@ -70,23 +72,30 @@ def create_app() -> FastAPI:
                 AIReaderConfig(
                     enabled=settings.ai_reader_enabled,
                     model=settings.ai_model,
+                    prompt_version=settings.ai_reader_prompt_version,
                     timeout_seconds=settings.ai_timeout_seconds,
                     max_input_chars=settings.ai_max_input_chars,
                     max_output_tokens=settings.ai_max_output_tokens,
                     include_internal_notes=settings.ai_include_internal_notes,
+                    max_thread_entries=settings.ai_max_thread_entries,
+                    max_internal_notes=settings.ai_max_internal_notes,
                 ),
-                ai_client if settings.ai_reader_enabled else None,
+                ai_client if (settings.ai_enabled and settings.ai_reader_enabled) else None,
+                cache=ai_cache,
             ),
             ai_recommender=AIRecommenderService(
                 AIRecommenderConfig(
                     enabled=settings.ai_recommender_enabled,
                     model=settings.ai_model,
+                    prompt_version=settings.ai_recommender_prompt_version,
                     timeout_seconds=settings.ai_timeout_seconds,
                     max_output_tokens=settings.ai_recommender_max_output_tokens,
                 ),
-                ai_client if settings.ai_recommender_enabled else None,
+                ai_client if (settings.ai_enabled and settings.ai_recommender_enabled) else None,
+                cache=ai_cache,
             ),
             page_size=settings.queue_page_size,
+            low_confidence_threshold=settings.ai_min_confidence_for_draft_adoption_warning,
         ),
         navigation_service=NavigationService(),
         panel_manager=PanelManager(),

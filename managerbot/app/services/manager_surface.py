@@ -20,6 +20,7 @@ class ManagerSurfaceService:
         ai_recommender: AIRecommenderService | None = None,
         page_size: int = 5,
         sla_service: SlaService | None = None,
+        low_confidence_threshold: float = 0.65,
     ) -> None:
         self._queue_repo = queue_repo
         self._case_repo = case_repo
@@ -29,6 +30,7 @@ class ManagerSurfaceService:
         self._ai_recommender = ai_recommender
         self._page_size = page_size
         self._sla_service = sla_service or SlaService()
+        self._low_confidence_threshold = low_confidence_threshold
 
     async def hub_view(self, actor: ManagerActor) -> tuple[PresenceStatus, dict[str, int]]:
         presence = await self._presence_repo.get_status(actor.actor_id)
@@ -85,13 +87,17 @@ class ManagerSurfaceService:
         )
         return "Reply saved, but delivery failed."
 
-    async def analyze_case_reader(self, detail: CaseDetail) -> AIReaderResult:
+    @property
+    def low_confidence_threshold(self) -> float:
+        return self._low_confidence_threshold
+
+    async def analyze_case_reader(self, detail: CaseDetail, *, force_refresh: bool = False) -> AIReaderResult:
         if not self._ai_reader:
             return AIReaderResult(ok=False, error_message="AI reader is disabled.")
-        return await self._ai_reader.analyze_case(detail, sla_state=self.case_sla_state(detail))
+        return await self._ai_reader.analyze_case(detail, sla_state=self.case_sla_state(detail), force_refresh=force_refresh)
 
-    async def recommend_case(self, detail: CaseDetail) -> AIRecommendationResult:
+    async def recommend_case(self, detail: CaseDetail, *, force_refresh: bool = False) -> AIRecommendationResult:
         if not self._ai_reader or not self._ai_recommender:
             return AIRecommendationResult(ok=False, error_message="AI recommender is disabled.")
         packet = self._ai_reader.build_packet(detail, sla_state=self.case_sla_state(detail))
-        return await self._ai_recommender.recommend(packet)
+        return await self._ai_recommender.recommend(packet, force_refresh=force_refresh)
