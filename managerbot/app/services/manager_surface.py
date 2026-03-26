@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.models import CaseDetail, ManagerActor, PresenceStatus, QueueItem
+from app.models import CaseDetail, HotTaskItem, ManagerActor, PresenceStatus, QueueItem
 from app.repositories.contracts import CaseRepository, PresenceRepository, QueueRepository
 from app.services.ai_reader import AIReaderResult, AIReaderService
 from app.services.ai_recommender import AIRecommendationResult, AIRecommenderService
@@ -32,10 +32,11 @@ class ManagerSurfaceService:
         self._sla_service = sla_service or SlaService()
         self._low_confidence_threshold = low_confidence_threshold
 
-    async def hub_view(self, actor: ManagerActor) -> tuple[PresenceStatus, dict[str, int]]:
+    async def hub_view(self, actor: ManagerActor) -> tuple[PresenceStatus, dict[str, int], dict[str, list[HotTaskItem]]]:
         presence = await self._presence_repo.get_status(actor.actor_id)
         counts = await self._queue_repo.summary_counts(actor.actor_id)
-        return presence, counts
+        hot_tasks = await self._queue_repo.list_hot_task_buckets(actor.actor_id, limit_per_bucket=3)
+        return presence, counts, hot_tasks
 
     async def queue_page(self, actor: ManagerActor, state: ManagerSessionState) -> list[QueueItem]:
         if not state.queue_key:

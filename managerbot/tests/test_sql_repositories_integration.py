@@ -263,6 +263,37 @@ def test_queue_repository_summary_filters_and_order() -> None:
     asyncio.run(run())
 
 
+def test_hot_task_buckets_membership_and_ordering() -> None:
+    async def run() -> None:
+        sf = await _make_session_factory()
+        repo = SqlQueueRepository(sf)
+        now = datetime.now(timezone.utc).isoformat()
+        async with sf() as session:
+            await session.execute(
+                text(
+                    """
+                    insert into ops.reply_delivery_attempts(
+                        id, thread_entry_id, quote_case_id, target_telegram_chat_id, attempt_number, transport,
+                        status, telegram_message_id, error_message, attempted_at, completed_at, created_at, updated_at
+                    ) values (
+                        'd1', 't2', 'c3', 40003, 1, 'telegram', 'failed', null, 'network', :now, :now, :now, :now
+                    )
+                    """
+                ),
+                {"now": now},
+            )
+            await session.commit()
+
+        buckets = await repo.list_hot_task_buckets("m1", limit_per_bucket=3)
+        assert [item.case_display_number for item in buckets["needs_reply_now"]] == [102]
+        assert [item.case_display_number for item in buckets["new_business"]] == [101]
+        assert [item.case_display_number for item in buckets["sla_at_risk"]] == [102]
+        assert [item.case_display_number for item in buckets["urgent_escalated"]] == [102, 101, 103]
+        assert [item.case_display_number for item in buckets["failed_delivery"]] == [103]
+
+    asyncio.run(run())
+
+
 def test_case_detail_and_claim_persist_canonical_assignment_event() -> None:
     async def run() -> None:
         sf = await _make_session_factory()

@@ -1,12 +1,24 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.models import CaseDetail, DeliverySnapshot, InternalNote, ManagerActor, NotificationEvent, PresenceStatus, QueueItem, SystemRole, ThreadEntry
+from app.models import (
+    CaseDetail,
+    DeliverySnapshot,
+    HotTaskBucketKey,
+    HotTaskItem,
+    InternalNote,
+    ManagerActor,
+    NotificationEvent,
+    PresenceStatus,
+    QueueItem,
+    SystemRole,
+    ThreadEntry,
+)
 
 
 class SqlActorRepository:
@@ -172,6 +184,170 @@ class SqlQueueRepository:
             )
         )
         return items[offset : offset + limit]
+
+    async def list_hot_task_buckets(self, actor_id, limit_per_bucket):
+        query = text(
+            """
+            select
+                qc.id as case_id,
+                qc.display_number as case_display_number,
+                qc.customer_label as customer_label,
+                s.status as operational_status,
+                s.waiting_state,
+                s.priority,
+                s.escalation_level,
+                s.assigned_manager_actor_id,
+                s.sla_due_at,
+                s.last_customer_message_at,
+                (
+                    select max(rda.attempted_at)
+                    from ops.reply_delivery_attempts rda
+                    where rda.quote_case_id = qc.id and rda.status = 'failed'
+                ) as failed_delivery_at
+            from ops.quote_case_ops_states s
+            join core.quote_cases qc on qc.id = s.quote_case_id
+            where s.status not in ('resolved', 'closed')
+            """
+        )
+        async with self._sf() as session:
+            rows = (await session.execute(query)).all()
+
+        now = datetime.now(timezone.utc)
+        epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        bucketed: dict[str, list[HotTaskItem]] = {
+            HotTaskBucketKey.NEEDS_REPLY_NOW.value: [],
+            HotTaskBucketKey.NEW_BUSINESS.value: [],
+            HotTaskBucketKey.SLA_AT_RISK.value: [],
+            HotTaskBucketKey.URGENT_ESCALATED.value: [],
+            HotTaskBucketKey.FAILED_DELIVERY.value: [],
+        }
+
+        for row in rows:
+            item = HotTaskItem(
+                case_id=row.case_id,
+                case_display_number=row.case_display_number,
+                customer_label=row.customer_label,
+                reason="",
+                priority=row.priority,
+                escalation_level=row.escalation_level,
+                waiting_state=row.waiting_state,
+                sla_due_at=_as_datetime(row.sla_due_at),
+                last_customer_message_at=_as_datetime(row.last_customer_message_at),
+                failed_delivery_at=_as_datetime(row.failed_delivery_at),
+            )
+            sla_state = _sla_state(item.sla_due_at, now)
+            is_manager_waiting = row.waiting_state in ("none", "waiting_manager", "waiting_owner")
+            if row.assigned_manager_actor_id == actor_id and is_manager_waiting:
+                reason = "Customer waiting for manager reply."
+                if sla_state == "overdue":
+                    reason = "Customer waiting; SLA overdue."
+                elif sla_state == "near_breach":
+                    reason = "Customer waiting; SLA near breach."
+                bucketed[HotTaskBucketKey.NEEDS_REPLY_NOW.value].append(_copy_hot_item(item, reason))
+
+            if row.operational_status == "new":
+                reason = "New unassigned business case."
+                if row.priority in {"high", "urgent"} or row.escalation_level > 0:
+                    reason = "New business with elevated priority."
+                bucketed[HotTaskBucketKey.NEW_BUSINESS.value].append(_copy_hot_item(item, reason))
+
+            if sla_state in {"near_breach", "overdue"}:
+                reason = "SLA overdue." if sla_state == "overdue" else "SLA near breach."
+                bucketed[HotTaskBucketKey.SLA_AT_RISK.value].append(_copy_hot_item(item, reason))
+
+            if row.priority in {"urgent", "high"} or row.escalation_level > 0:
+                reason = "Escalated case." if row.escalation_level > 0 else "High-priority case."
+                if row.priority == "urgent":
+                    reason = "Urgent priority case."
+                bucketed[HotTaskBucketKey.URGENT_ESCALATED.value].append(_copy_hot_item(item, reason))
+
+            if item.failed_delivery_at:
+                bucketed[HotTaskBucketKey.FAILED_DELIVERY.value].append(_copy_hot_item(item, "Outbound delivery failed; review and recover."))
+
+        def urgency_rank(task: HotTaskItem) -> int:
+            return {"urgent": 0, "high": 1}.get(task.priority, 2)
+
+        bucketed[HotTaskBucketKey.NEEDS_REPLY_NOW.value].sort(
+            key=lambda i: (
+                _sla_rank(i.sla_due_at, now),
+                i.sla_due_at or epoch,
+                urgency_rank(i),
+                i.last_customer_message_at or epoch,
+                i.case_display_number,
+            )
+        )
+        bucketed[HotTaskBucketKey.NEW_BUSINESS.value].sort(
+            key=lambda i: (
+                urgency_rank(i),
+                -i.escalation_level,
+                -(i.last_customer_message_at or epoch).timestamp(),
+                i.case_display_number,
+            )
+        )
+        bucketed[HotTaskBucketKey.SLA_AT_RISK.value].sort(
+            key=lambda i: (
+                _sla_rank(i.sla_due_at, now),
+                i.sla_due_at or epoch,
+                urgency_rank(i),
+                -i.escalation_level,
+                i.case_display_number,
+            )
+        )
+        bucketed[HotTaskBucketKey.URGENT_ESCALATED.value].sort(
+            key=lambda i: (
+                urgency_rank(i),
+                -i.escalation_level,
+                _sla_rank(i.sla_due_at, now),
+                i.sla_due_at or epoch,
+                i.case_display_number,
+            )
+        )
+        bucketed[HotTaskBucketKey.FAILED_DELIVERY.value].sort(
+            key=lambda i: (-(i.failed_delivery_at or epoch).timestamp(), urgency_rank(i), i.case_display_number)
+        )
+        return {key: values[:limit_per_bucket] for key, values in bucketed.items()}
+
+
+def _copy_hot_item(item: HotTaskItem, reason: str) -> HotTaskItem:
+    return HotTaskItem(
+        case_id=item.case_id,
+        case_display_number=item.case_display_number,
+        customer_label=item.customer_label,
+        reason=reason,
+        priority=item.priority,
+        escalation_level=item.escalation_level,
+        waiting_state=item.waiting_state,
+        sla_due_at=item.sla_due_at,
+        last_customer_message_at=item.last_customer_message_at,
+        failed_delivery_at=item.failed_delivery_at,
+    )
+
+
+def _as_datetime(value):
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return datetime.fromisoformat(str(value))
+
+
+def _sla_state(sla_due_at: datetime | None, now: datetime) -> str:
+    if not sla_due_at:
+        return "healthy"
+    if sla_due_at <= now:
+        return "overdue"
+    if sla_due_at <= now + timedelta(minutes=30):
+        return "near_breach"
+    return "healthy"
+
+
+def _sla_rank(sla_due_at: datetime | None, now: datetime) -> int:
+    state = _sla_state(sla_due_at, now)
+    if state == "overdue":
+        return 0
+    if state == "near_breach":
+        return 1
+    return 2
 
 
 class SqlCaseRepository:

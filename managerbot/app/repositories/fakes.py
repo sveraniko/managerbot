@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 from uuid import uuid4
 
-from app.models import CaseDetail, ManagerActor, NotificationEvent, PresenceStatus, QueueItem, ThreadEntry
+from app.models import CaseDetail, HotTaskItem, ManagerActor, NotificationEvent, PresenceStatus, QueueItem, ThreadEntry
 
 
 class FakeActorRepository:
@@ -33,14 +33,19 @@ class FakePresenceRepository:
 
 
 class FakeQueueRepository:
-    def __init__(self, queues: dict[str, list[QueueItem]]) -> None:
+    def __init__(self, queues: dict[str, list[QueueItem]], hot_tasks: dict[str, list[HotTaskItem]] | None = None) -> None:
         self.queues = queues
+        self.hot_tasks = hot_tasks or {}
 
     async def summary_counts(self, actor_id: UUID):
         return {k: len(v) for k, v in self.queues.items()}
 
     async def list_queue(self, queue_key: str, actor_id: UUID, offset: int, limit: int):
         return self.queues.get(queue_key, [])[offset : offset + limit]
+
+    async def list_hot_task_buckets(self, actor_id: UUID, limit_per_bucket: int) -> dict[str, list[HotTaskItem]]:
+        _ = actor_id
+        return {k: list(v[:limit_per_bucket]) for k, v in self.hot_tasks.items()}
 
 
 class FakeCaseRepository:

@@ -1,15 +1,49 @@
-from app.models import CaseDetail, ManagerActor, PresenceStatus, QueueItem
+from datetime import datetime, timezone
+
+from app.models import CaseDetail, HotTaskItem, ManagerActor, PresenceStatus, QueueItem
 from app.services.ai_reader import AIReaderAnalysis
 from app.services.ai_recommender import AIRecommendation
 from app.services.ai_state import AISnapshotMeta
 from app.services.sla import SlaService
 
 
-def render_hub(actor: ManagerActor, presence: PresenceStatus, counts: dict[str, int]) -> str:
-    return (
+def render_hub(
+    actor: ManagerActor,
+    presence: PresenceStatus,
+    counts: dict[str, int],
+    hot_tasks: dict[str, list[HotTaskItem]],
+) -> str:
+    active_load = sum(len(items) for items in hot_tasks.values())
+    summary_line = (
+        f"Attention: {active_load} | overdue: {counts.get('sla_overdue', 0)} | "
+        f"failed delivery: {len(hot_tasks.get('failed_delivery', []))} | new business: {len(hot_tasks.get('new_business', []))}"
+    )
+    head = (
         f"ManagerBot Hub\\n"
         f"Manager: {actor.display_name} ({actor.role.value})\\n"
         f"Presence: {presence.value}\\n\\n"
+        f"{summary_line}\\n\\n"
+        f"Hot Tasks\\n"
+    )
+    buckets = [
+        ("needs_reply_now", "Needs reply now"),
+        ("new_business", "New business"),
+        ("sla_at_risk", "SLA at risk"),
+        ("urgent_escalated", "Urgent / VIP / escalated"),
+        ("failed_delivery", "Failed delivery"),
+    ]
+    lines = [head]
+    for key, title in buckets:
+        items = hot_tasks.get(key, [])
+        lines.append(f"{title}: {len(items)}")
+        if not items:
+            lines.append("- none")
+            continue
+        for item in items:
+            lines.append(f"- {_render_hot_task_item(item)}")
+        lines.append("")
+
+    lines.append(
         f"Queues\\n"
         f"New/Unassigned: {counts.get('new', 0)}\\n"
         f"Assigned to me: {counts.get('mine', 0)}\\n"
@@ -20,6 +54,7 @@ def render_hub(actor: ManagerActor, presence: PresenceStatus, counts: dict[str, 
         f"SLA near: {counts.get('sla_near', 0)}\\n"
         f"SLA overdue: {counts.get('sla_overdue', 0)}"
     )
+    return "\\n".join(lines)
 
 
 def render_queue(queue_key: str, items: list[QueueItem], offset: int) -> str:
@@ -125,3 +160,18 @@ def _snippet(text: str, limit: int = 140) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 1] + "…"
+
+
+def _render_hot_task_item(item: HotTaskItem) -> str:
+    sla = SlaService().classify(item.sla_due_at)
+    cue = "t:-"
+    marker_ts = item.failed_delivery_at or item.last_customer_message_at or item.sla_due_at
+    if marker_ts:
+        dt = marker_ts if marker_ts.tzinfo else marker_ts.replace(tzinfo=timezone.utc)
+        delta_minutes = int((datetime.now(timezone.utc) - dt).total_seconds() // 60)
+        cue = f"t:{abs(delta_minutes)}m"
+    customer = item.customer_label or "-"
+    return (
+        f"#{item.case_display_number} {customer} | {item.reason} | "
+        f"p:{item.priority} e:{item.escalation_level} sla:{sla} {cue}"
+    )

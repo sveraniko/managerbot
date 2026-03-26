@@ -2,11 +2,12 @@ import asyncio
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from app.models import CaseDetail, ManagerActor, QueueItem, SystemRole, ThreadEntry
+from app.models import CaseDetail, HotTaskItem, ManagerActor, PresenceStatus, QueueItem, SystemRole, ThreadEntry
 from app.repositories.fakes import FakeCaseRepository, FakePresenceRepository, FakeQueueRepository
+from app.bot.keyboards import hub_keyboard
 from app.services.delivery import DeliveryResult
 from app.services.manager_surface import ManagerSurfaceService
-from app.services.rendering import render_case_detail, render_queue
+from app.services.rendering import render_case_detail, render_hub, render_queue
 from app.state.manager_session import ManagerSessionState
 
 
@@ -115,3 +116,54 @@ def test_reply_send_updates_delivery_status_and_note_is_internal_only() -> None:
     assert "Internal follow-up only" in rendered
     assert "We are checking this now." in rendered
     assert "[failed]" in rendered
+
+
+def test_workdesk_hub_render_includes_hot_tasks_and_queue_summary() -> None:
+    actor = ManagerActor(uuid4(), 1, "Manager", SystemRole.MANAGER)
+    hot_tasks = {
+        "needs_reply_now": [
+            HotTaskItem(
+                case_id=uuid4(),
+                case_display_number=701,
+                customer_label="Acme",
+                reason="Customer waiting; SLA near breach.",
+                priority="high",
+                escalation_level=0,
+                waiting_state="waiting_manager",
+                last_customer_message_at=datetime.now(timezone.utc),
+            )
+        ],
+        "new_business": [],
+        "sla_at_risk": [],
+        "urgent_escalated": [],
+        "failed_delivery": [],
+    }
+    text = render_hub(actor, presence=PresenceStatus.OFFLINE, counts={"new": 2, "mine": 1}, hot_tasks=hot_tasks)
+    assert "Hot Tasks" in text
+    assert "Needs reply now: 1" in text
+    assert "#701 Acme" in text
+    assert "Queues" in text
+    assert "New/Unassigned: 2" in text
+
+
+def test_workdesk_keyboard_has_direct_case_actions_and_see_more() -> None:
+    case_id = uuid4()
+    keyboard = hub_keyboard(
+        {
+            "needs_reply_now": [
+                HotTaskItem(
+                    case_id=case_id,
+                    case_display_number=710,
+                    customer_label="Beta",
+                    reason="Customer waiting for manager reply.",
+                    priority="normal",
+                    escalation_level=0,
+                    waiting_state="waiting_manager",
+                )
+            ]
+        }
+    )
+    texts = [button.text for row in keyboard.inline_keyboard for button in row]
+    callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
+    assert "Needs reply: Case #710" in texts
+    assert any("queue:waiting_me" in callback or "waiting_me" in callback for callback in callbacks)

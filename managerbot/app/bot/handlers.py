@@ -69,8 +69,8 @@ def build_router(
         state.panel_key = "hub:home"
         state.queue_offset = 0
         await session_store.set(message.from_user.id, state)
-        presence, counts = await surface_service.hub_view(actor)
-        await panel_manager.render(message, render_hub(actor, presence, counts), hub_keyboard())
+        presence, counts, hot_tasks = await surface_service.hub_view(actor)
+        await panel_manager.render(message, render_hub(actor, presence, counts, hot_tasks), hub_keyboard(hot_tasks))
 
     @router.message(F.text)
     async def compose_input(message: Message) -> None:
@@ -116,12 +116,12 @@ def build_router(
 
         if callback_data.action == "home":
             state = navigation_service.go_home(state)
-            presence, counts = await surface_service.hub_view(actor)
-            await panel_manager.render(msg, render_hub(actor, presence, counts), hub_keyboard())
+            presence, counts, hot_tasks = await surface_service.hub_view(actor)
+            await panel_manager.render(msg, render_hub(actor, presence, counts, hot_tasks), hub_keyboard(hot_tasks))
         elif callback_data.action == "presence":
             await surface_service.toggle_presence(actor)
-            presence, counts = await surface_service.hub_view(actor)
-            await panel_manager.render(msg, render_hub(actor, presence, counts), hub_keyboard())
+            presence, counts, hot_tasks = await surface_service.hub_view(actor)
+            await panel_manager.render(msg, render_hub(actor, presence, counts, hot_tasks), hub_keyboard(hot_tasks))
         elif callback_data.action == "queue":
             state = navigation_service.open_panel(state, f"queue:{callback_data.value}")
             state.queue_key = callback_data.value
@@ -182,8 +182,8 @@ def build_router(
             if state.selected_case_id:
                 await render_selected_case(msg, actor, state)
             else:
-                presence, counts = await surface_service.hub_view(actor)
-                await panel_manager.render(msg, render_hub(actor, presence, counts), hub_keyboard())
+                presence, counts, hot_tasks = await surface_service.hub_view(actor)
+                await panel_manager.render(msg, render_hub(actor, presence, counts, hot_tasks), hub_keyboard(hot_tasks))
         elif callback_data.action == "compose_back_case":
             compose_service.back_to_case(state)
             await render_selected_case(msg, actor, state)
@@ -261,14 +261,14 @@ def build_router(
                 items = await surface_service.queue_page(actor, state)
                 await panel_manager.render(msg, render_queue(state.queue_key, items, state.queue_offset), queue_keyboard(items))
             else:
-                presence, counts = await surface_service.hub_view(actor)
-                await panel_manager.render(msg, render_hub(actor, presence, counts), hub_keyboard())
+                presence, counts, hot_tasks = await surface_service.hub_view(actor)
+                await panel_manager.render(msg, render_hub(actor, presence, counts, hot_tasks), hub_keyboard(hot_tasks))
         elif callback_data.action == "refresh":
             if callback_data.value == "case" and state.selected_case_id:
                 await render_selected_case(msg, actor, state)
             else:
-                presence, counts = await surface_service.hub_view(actor)
-                await panel_manager.render(msg, render_hub(actor, presence, counts), hub_keyboard())
+                presence, counts, hot_tasks = await surface_service.hub_view(actor)
+                await panel_manager.render(msg, render_hub(actor, presence, counts, hot_tasks), hub_keyboard(hot_tasks))
 
         await session_store.set(callback.from_user.id, state)
         await callback.answer()

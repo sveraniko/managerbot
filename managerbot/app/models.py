@@ -27,6 +27,14 @@ class QueueKey(str, Enum):
     ESCALATED = "escalated"
 
 
+class HotTaskBucketKey(str, Enum):
+    NEEDS_REPLY_NOW = "needs_reply_now"
+    NEW_BUSINESS = "new_business"
+    SLA_AT_RISK = "sla_at_risk"
+    URGENT_ESCALATED = "urgent_escalated"
+    FAILED_DELIVERY = "failed_delivery"
+
+
 @dataclass(slots=True)
 class ManagerActor:
     actor_id: UUID
@@ -47,6 +55,20 @@ class QueueItem:
     escalation_level: int
     last_customer_message_at: datetime | None
     sla_due_at: datetime | None = None
+
+
+@dataclass(slots=True)
+class HotTaskItem:
+    case_id: UUID
+    case_display_number: int
+    customer_label: str | None
+    reason: str
+    priority: str
+    escalation_level: int
+    waiting_state: str
+    sla_due_at: datetime | None = None
+    last_customer_message_at: datetime | None = None
+    failed_delivery_at: datetime | None = None
 
 
 @dataclass(slots=True)

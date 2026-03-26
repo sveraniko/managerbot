@@ -1,13 +1,40 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.bot.callbacks import MBCallback
-from app.models import QueueItem
+from app.models import HotTaskItem, QueueItem
 
 
-def hub_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="Presence", callback_data=MBCallback(action="presence").pack())],
+def hub_keyboard(hot_tasks: dict[str, list[HotTaskItem]]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = [[InlineKeyboardButton(text="Presence", callback_data=MBCallback(action="presence").pack())]]
+    bucket_order = [
+        ("needs_reply_now", "Needs reply", "waiting_me"),
+        ("new_business", "New business", "new"),
+        ("sla_at_risk", "SLA risk", "urgent"),
+        ("urgent_escalated", "Urgent/escalated", "urgent"),
+        ("failed_delivery", "Failed delivery", "mine"),
+    ]
+    for key, title, queue_key in bucket_order:
+        items = hot_tasks.get(key, [])
+        for item in items:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"{title}: Case #{item.case_display_number}",
+                        callback_data=MBCallback(action="case", value=str(item.case_id)).pack(),
+                    )
+                ]
+            )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"See more: {title}",
+                    callback_data=MBCallback(action="queue", value=queue_key).pack(),
+                )
+            ]
+        )
+
+    rows.extend(
+        [
             [InlineKeyboardButton(text="New/Unassigned", callback_data=MBCallback(action="queue", value="new").pack())],
             [InlineKeyboardButton(text="Assigned to me", callback_data=MBCallback(action="queue", value="mine").pack())],
             [InlineKeyboardButton(text="Waiting for me", callback_data=MBCallback(action="queue", value="waiting_me").pack())],
@@ -17,6 +44,7 @@ def hub_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Refresh", callback_data=MBCallback(action="refresh", value="hub").pack())],
         ]
     )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def queue_keyboard(items: list[QueueItem]) -> InlineKeyboardMarkup:

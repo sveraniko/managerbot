@@ -45,6 +45,7 @@ def test_hub_view_uses_offline_default_presence() -> None:
         delivery_gateway=FakeDeliveryGateway(),
     )
 
-    status, counts = asyncio.run(service.hub_view(actor))
+    status, counts, hot_tasks = asyncio.run(service.hub_view(actor))
     assert status == PresenceStatus.OFFLINE
     assert counts == {}
+    assert hot_tasks == {}
