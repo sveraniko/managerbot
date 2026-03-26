@@ -4,6 +4,7 @@ from uuid import uuid4
 
 from app.models import (
     CaseDetail,
+    CustomerCard,
     HotTaskBucket,
     HotTaskBucketKey,
     HotTaskItem,
@@ -16,7 +17,7 @@ from app.models import (
 from app.repositories.fakes import FakeCaseRepository, FakePresenceRepository, FakeQueueRepository
 from app.services.delivery import DeliveryResult
 from app.services.manager_surface import ManagerSurfaceService
-from app.services.rendering import render_case_detail, render_hub, render_queue
+from app.services.rendering import render_case_detail, render_contact_actions_panel, render_hub, render_queue
 from app.state.manager_session import ManagerSessionState
 
 
@@ -68,6 +69,7 @@ def test_case_detail_render_read_only_and_claim_updates() -> None:
         linked_order_display_number=88,
         linked_quote_display_number=777,
         thread_entries=[ThreadEntry("customer", "Need update", datetime.now(timezone.utc))],
+        customer_card=CustomerCard(label="Acme", actor_id="cust-1", telegram_chat_id=40001, telegram_user_id=40001),
     )
     cases = FakeCaseRepository({case_id: detail})
     service = ManagerSurfaceService(
@@ -83,6 +85,9 @@ def test_case_detail_render_read_only_and_claim_updates() -> None:
     assert "Internal notes:" in before
     assert "Case #777" in before
     assert "Order #88" in before
+    assert "Customer card:" in before
+    assert "Telegram chat ID: 40001" in before
+    assert "Direct contact policy" in before
     assert "SLA: healthy" in before
 
     claimed = asyncio.run(service.claim_case(actor, case_id))
@@ -92,6 +97,26 @@ def test_case_detail_render_read_only_and_claim_updates() -> None:
     assert updated is not None
     assert updated.assignment_label == "Assigned to me"
     assert updated.operational_status == "active"
+
+
+def test_contact_actions_panel_handles_missing_data_cleanly() -> None:
+    detail = CaseDetail(
+        case_id=uuid4(),
+        case_display_number=778,
+        commercial_status="open",
+        operational_status="active",
+        waiting_state="waiting_manager",
+        priority="normal",
+        escalation_level=0,
+        assignment_label="Assigned to me",
+        linked_quote_display_number=778,
+        customer_card=CustomerCard(label=None, actor_id=None, telegram_chat_id=None, telegram_user_id=None),
+    )
+    rendered = render_contact_actions_panel(detail)
+    assert "Customer card:" in rendered
+    assert "Label: Unavailable" in rendered
+    assert "Telegram chat ID: Unavailable" in rendered
+    assert "Direct-contact cues:" in rendered
 
 
 def test_reply_send_updates_delivery_status_and_note_is_internal_only() -> None:

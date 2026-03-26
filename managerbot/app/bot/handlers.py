@@ -9,6 +9,7 @@ from aiogram.types import CallbackQuery, Message
 from app.bot.callbacks import MBCallback
 from app.bot.keyboards import (
     case_keyboard,
+    contact_actions_keyboard,
     compose_keyboard,
     filters_keyboard,
     hub_keyboard,
@@ -18,6 +19,7 @@ from app.bot.keyboards import (
     search_input_keyboard,
     search_results_keyboard,
 )
+from app.models import CustomerCard
 from app.bot.panel_manager import PanelManager
 from app.models import QueueFilters
 from app.services.access import AccessService
@@ -25,7 +27,14 @@ from app.services.ai_state import analysis_for_case, bind_ai_recommendation, bin
 from app.services.compose import ComposeStateService
 from app.services.manager_surface import ManagerSurfaceService
 from app.services.navigation import NavigationService
-from app.services.rendering import render_case_detail, render_filters, render_hub, render_queue, render_search_results
+from app.services.rendering import (
+    render_case_detail,
+    render_contact_actions_panel,
+    render_filters,
+    render_hub,
+    render_queue,
+    render_search_results,
+)
 from app.state.manager_session import ManagerSessionStore
 
 
@@ -219,6 +228,50 @@ def build_router(
             else:
                 compose_service.start_note(state, state.selected_case_id)
                 await panel_manager.render(msg, "Compose internal note.\nSend note text in the next message.\nThis note is internal-only.", compose_keyboard())
+        elif callback_data.action == "contact_panel":
+            if not state.selected_case_id:
+                await callback.answer("Open a case first", show_alert=True)
+            else:
+                detail = await surface_service.case_detail(actor, state.selected_case_id)
+                if not detail:
+                    await callback.answer("Case not found", show_alert=True)
+                else:
+                    state = navigation_service.open_panel(state, "case:contact")
+                    card = detail.customer_card or CustomerCard(label=detail.customer_label)
+                    await panel_manager.render(msg, render_contact_actions_panel(detail), contact_actions_keyboard(card))
+        elif callback_data.action == "contact_copy":
+            if not state.selected_case_id:
+                await callback.answer("Open a case first", show_alert=True)
+            else:
+                detail = await surface_service.case_detail(actor, state.selected_case_id)
+                if not detail:
+                    await callback.answer("Case not found", show_alert=True)
+                else:
+                    card = detail.customer_card or CustomerCard(label=detail.customer_label)
+                    value = {
+                        "username": card.telegram_username or "Unavailable",
+                        "chat_id": str(card.telegram_chat_id) if card.telegram_chat_id is not None else "Unavailable",
+                        "user_id": str(card.telegram_user_id) if card.telegram_user_id is not None else "Unavailable",
+                        "phone": card.phone_number or "Unavailable",
+                    }.get(callback_data.value, "Unavailable")
+                    await callback.answer(f"Copy manually: {value}", show_alert=True)
+        elif callback_data.action == "log_contact_outcome":
+            if not state.selected_case_id:
+                await callback.answer("Open a case first", show_alert=True)
+            else:
+                compose_service.start_note_template(
+                    state,
+                    state.selected_case_id,
+                    "Direct contact outcome:\n- Channel:\n- Summary:\n- Next step:",
+                )
+                await panel_manager.render(
+                    msg,
+                    "Contact note template loaded.\nEdit if needed, then save note draft.",
+                    note_preview_keyboard(),
+                )
+        elif callback_data.action == "contact_back":
+            state.panel_key = "case:detail"
+            await render_selected_case(msg, actor, state)
         elif callback_data.action == "reply_confirm":
             if state.compose_mode != "reply" or not state.compose_case_id or not state.compose_draft_text:
                 await callback.answer("No reply draft to send.", show_alert=True)

@@ -303,6 +303,8 @@ def test_queue_archive_search_and_priority_controls() -> None:
 
         search = await queue_repo.search_cases("m1", "cust", 10, QueueFilters(lifecycle_scope="all"))
         assert [item.case_display_number for item in search[:2]] == [101, 102]
+        assert search[0].customer_actor_id == "cust"
+        assert search[0].customer_telegram_chat_id == 40001
 
     asyncio.run(run())
 
@@ -316,6 +318,11 @@ def test_case_detail_and_claim_persist_canonical_assignment_event() -> None:
         assert detail is not None
         assert detail.linked_quote_display_number == 101
         assert detail.linked_order_display_number == 9001
+        assert detail.customer_card is not None
+        assert detail.customer_card.label == "Acme"
+        assert detail.customer_card.actor_id == "cust"
+        assert detail.customer_card.telegram_chat_id == 40001
+        assert detail.customer_card.telegram_user_id == 7777
         assert [entry.body for entry in detail.thread_entries] == ["Need update", "Working on it"]
 
         claimed = await cases.claim_case("c1", "m1")

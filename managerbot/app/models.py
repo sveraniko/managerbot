@@ -108,6 +108,16 @@ class DeliverySnapshot:
 
 
 @dataclass(slots=True)
+class CustomerCard:
+    label: str | None
+    actor_id: str | None = None
+    telegram_chat_id: int | None = None
+    telegram_user_id: int | None = None
+    telegram_username: str | None = None
+    phone_number: str | None = None
+
+
+@dataclass(slots=True)
 class NotificationEvent:
     event_key: str
     kind: str
@@ -132,6 +142,7 @@ class CaseDetail:
     linked_order_display_number: int | None = None
     linked_quote_display_number: int | None = None
     customer_label: str | None = None
+    customer_card: CustomerCard | None = None
     thread_entries: list[ThreadEntry] = field(default_factory=list)
     internal_notes: list[InternalNote] = field(default_factory=list)
     last_delivery: DeliverySnapshot | None = None
@@ -158,3 +169,5 @@ class SearchResultItem:
     priority: str
     escalation_level: int
     is_archived: bool
+    customer_actor_id: str | None = None
+    customer_telegram_chat_id: int | None = None

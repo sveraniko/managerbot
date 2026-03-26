@@ -32,6 +32,13 @@ class ComposeStateService:
         state.compose_draft_text = draft_text.strip()
         return True
 
+    def start_note_template(self, state: ManagerSessionState, case_id: UUID, template_text: str) -> bool:
+        if state.selected_case_id != case_id or not template_text.strip():
+            return False
+        self.start_note(state, case_id)
+        state.compose_draft_text = template_text.strip()
+        return True
+
     def cancel(self, state: ManagerSessionState) -> ManagerSessionState:
         state.compose_mode = None
         state.compose_case_id = None
