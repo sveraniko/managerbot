@@ -25,6 +25,9 @@ class QueueKey(str, Enum):
     WAITING_CUSTOMER = "waiting_customer"
     URGENT = "urgent"
     ESCALATED = "escalated"
+    SLA_RISK = "sla_risk"
+    FAILED_DELIVERY = "failed_delivery"
+    URGENT_ESCALATED = "urgent_escalated"
 
 
 class HotTaskBucketKey(str, Enum):

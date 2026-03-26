@@ -48,9 +48,9 @@ class FakeQueueRepository:
         mappings = [
             (HotTaskBucketKey.NEEDS_REPLY_NOW, "Needs reply now", "waiting_me"),
             (HotTaskBucketKey.NEW_BUSINESS, "New business", "new"),
-            (HotTaskBucketKey.SLA_AT_RISK, "SLA at risk", "waiting_me"),
-            (HotTaskBucketKey.URGENT_ESCALATED, "Urgent / VIP / escalated", "urgent"),
-            (HotTaskBucketKey.FAILED_DELIVERY, "Failed delivery", "waiting_me"),
+            (HotTaskBucketKey.SLA_AT_RISK, "SLA at risk", "sla_risk"),
+            (HotTaskBucketKey.URGENT_ESCALATED, "Urgent / VIP / escalated", "urgent_escalated"),
+            (HotTaskBucketKey.FAILED_DELIVERY, "Failed delivery", "failed_delivery"),
         ]
         for key, title, queue_key in mappings:
             items = [
