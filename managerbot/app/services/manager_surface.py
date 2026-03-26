@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.models import CaseDetail, ManagerActor, PresenceStatus, QueueItem
 from app.repositories.contracts import CaseRepository, PresenceRepository, QueueRepository
+from app.services.ai_reader import AIReaderResult, AIReaderService
 from app.services.delivery import CustomerDeliveryGateway
 from app.services.sla import SlaService
 from app.state.manager_session import ManagerSessionState
@@ -14,6 +15,7 @@ class ManagerSurfaceService:
         case_repo: CaseRepository,
         presence_repo: PresenceRepository,
         delivery_gateway: CustomerDeliveryGateway,
+        ai_reader: AIReaderService | None = None,
         page_size: int = 5,
         sla_service: SlaService | None = None,
     ) -> None:
@@ -21,6 +23,7 @@ class ManagerSurfaceService:
         self._case_repo = case_repo
         self._presence_repo = presence_repo
         self._delivery_gateway = delivery_gateway
+        self._ai_reader = ai_reader
         self._page_size = page_size
         self._sla_service = sla_service or SlaService()
 
@@ -78,3 +81,8 @@ class ManagerSurfaceService:
             error_message=result.error_message,
         )
         return "Reply saved, but delivery failed."
+
+    async def analyze_case_reader(self, detail: CaseDetail) -> AIReaderResult:
+        if not self._ai_reader:
+            return AIReaderResult(ok=False, error_message="AI reader is disabled.")
+        return await self._ai_reader.analyze_case(detail, sla_state=self.case_sla_state(detail))

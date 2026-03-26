@@ -186,6 +186,7 @@ class SqlCaseRepository:
                         """
                         select qc.id as case_id, qc.display_number as case_display_number, qc.status as commercial_status,
                                ops.status as operational_status, ops.waiting_state, ops.priority, ops.escalation_level, ops.sla_due_at,
+                               qc.customer_label as customer_label,
                                coalesce(am.display_name, 'Unassigned') as assignment_label,
                                o.display_number as linked_order_display_number
                         from core.quote_cases qc

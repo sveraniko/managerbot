@@ -10,6 +10,7 @@ from app.bot.callbacks import MBCallback
 from app.bot.keyboards import case_keyboard, compose_keyboard, hub_keyboard, queue_keyboard, reply_preview_keyboard
 from app.bot.panel_manager import PanelManager
 from app.services.access import AccessService
+from app.services.ai_state import analysis_for_case, bind_ai_result, clear_ai_snapshot
 from app.services.compose import ComposeStateService
 from app.services.manager_surface import ManagerSurfaceService
 from app.services.navigation import NavigationService
@@ -52,7 +53,8 @@ def build_router(
             return
         detail = await surface_service.case_detail(actor, state.selected_case_id)
         if detail:
-            await panel_manager.render(message, render_case_detail(detail), case_keyboard())
+            ai_analysis, ai_error = analysis_for_case(state, detail.case_id)
+            await panel_manager.render(message, render_case_detail(detail, ai_analysis=ai_analysis, ai_error=ai_error), case_keyboard())
 
     @router.message(F.text)
     async def compose_input(message: Message) -> None:
@@ -120,25 +122,31 @@ def build_router(
             await panel_manager.render(msg, render_queue(state.queue_key or "", items, state.queue_offset), queue_keyboard(items))
         elif callback_data.action == "case":
             state = navigation_service.open_panel(state, "case:detail")
-            state.selected_case_id = UUID(callback_data.value)
+            next_case_id = UUID(callback_data.value)
+            if state.selected_case_id != next_case_id:
+                clear_ai_snapshot(state)
+            state.selected_case_id = next_case_id
             detail = await surface_service.case_detail(actor, state.selected_case_id)
             if not detail:
                 await callback.answer("Case not found", show_alert=True)
             else:
-                await panel_manager.render(msg, render_case_detail(detail), case_keyboard())
+                ai_analysis, ai_error = analysis_for_case(state, detail.case_id)
+                await panel_manager.render(msg, render_case_detail(detail, ai_analysis=ai_analysis, ai_error=ai_error), case_keyboard())
         elif callback_data.action == "claim":
             if state.selected_case_id:
                 await surface_service.claim_case(actor, state.selected_case_id)
                 detail = await surface_service.case_detail(actor, state.selected_case_id)
                 if detail:
-                    await panel_manager.render(msg, render_case_detail(detail), case_keyboard())
+                    ai_analysis, ai_error = analysis_for_case(state, detail.case_id)
+                    await panel_manager.render(msg, render_case_detail(detail, ai_analysis=ai_analysis, ai_error=ai_error), case_keyboard())
         elif callback_data.action == "escalate_owner":
             if state.selected_case_id:
                 ok = await surface_service.escalate_to_owner(actor, state.selected_case_id)
                 detail = await surface_service.case_detail(actor, state.selected_case_id)
                 if detail:
                     prefix = "Escalated to owner.\n\n" if ok else "Escalation failed.\n\n"
-                    await panel_manager.render(msg, prefix + render_case_detail(detail), case_keyboard())
+                    ai_analysis, ai_error = analysis_for_case(state, detail.case_id)
+                    await panel_manager.render(msg, prefix + render_case_detail(detail, ai_analysis=ai_analysis, ai_error=ai_error), case_keyboard())
         elif callback_data.action == "reply_start":
             if not state.selected_case_id:
                 await callback.answer("Open a case first", show_alert=True)
@@ -167,7 +175,8 @@ def build_router(
                 compose_service.cancel(state)
                 detail = await surface_service.case_detail(actor, state.selected_case_id)
                 if detail:
-                    await panel_manager.render(msg, f"{result_notice}\n\n{render_case_detail(detail)}", case_keyboard())
+                    ai_analysis, ai_error = analysis_for_case(state, detail.case_id)
+                    await panel_manager.render(msg, f"{result_notice}\n\n{render_case_detail(detail, ai_analysis=ai_analysis, ai_error=ai_error)}", case_keyboard())
         elif callback_data.action == "reply_edit":
             if state.compose_mode != "reply" or not state.compose_case_id:
                 await callback.answer("Reply compose is not active.", show_alert=True)
@@ -181,7 +190,8 @@ def build_router(
             compose_service.cancel(state)
             detail = await surface_service.case_detail(actor, state.selected_case_id) if state.selected_case_id else None
             if detail:
-                await panel_manager.render(msg, render_case_detail(detail), case_keyboard())
+                ai_analysis, ai_error = analysis_for_case(state, detail.case_id)
+                await panel_manager.render(msg, render_case_detail(detail, ai_analysis=ai_analysis, ai_error=ai_error), case_keyboard())
             else:
                 presence, counts = await surface_service.hub_view(actor)
                 await panel_manager.render(msg, render_hub(actor, presence, counts), hub_keyboard())
@@ -189,7 +199,18 @@ def build_router(
             compose_service.back_to_case(state)
             detail = await surface_service.case_detail(actor, state.selected_case_id) if state.selected_case_id else None
             if detail:
-                await panel_manager.render(msg, render_case_detail(detail), case_keyboard())
+                ai_analysis, ai_error = analysis_for_case(state, detail.case_id)
+                await panel_manager.render(msg, render_case_detail(detail, ai_analysis=ai_analysis, ai_error=ai_error), case_keyboard())
+        elif callback_data.action == "ai_analyze":
+            if not state.selected_case_id:
+                await callback.answer("Open a case first", show_alert=True)
+            else:
+                detail = await surface_service.case_detail(actor, state.selected_case_id)
+                if detail:
+                    ai_result = await surface_service.analyze_case_reader(detail)
+                    bind_ai_result(state, detail.case_id, ai_result.analysis, ai_result.error_message)
+                    ai_analysis, ai_error = analysis_for_case(state, detail.case_id)
+                    await panel_manager.render(msg, render_case_detail(detail, ai_analysis=ai_analysis, ai_error=ai_error), case_keyboard())
         elif callback_data.action == "back":
             state = navigation_service.back(state)
             if state.panel_key.startswith("queue:") and state.queue_key:
@@ -202,7 +223,8 @@ def build_router(
             if callback_data.value == "case" and state.selected_case_id:
                 detail = await surface_service.case_detail(actor, state.selected_case_id)
                 if detail:
-                    await panel_manager.render(msg, render_case_detail(detail), case_keyboard())
+                    ai_analysis, ai_error = analysis_for_case(state, detail.case_id)
+                    await panel_manager.render(msg, render_case_detail(detail, ai_analysis=ai_analysis, ai_error=ai_error), case_keyboard())
             else:
                 presence, counts = await surface_service.hub_view(actor)
                 await panel_manager.render(msg, render_hub(actor, presence, counts), hub_keyboard())
