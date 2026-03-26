@@ -221,7 +221,7 @@ def test_presence_repository_roundtrip_and_default() -> None:
         sf = await _make_session_factory()
         repo = SqlPresenceRepository(sf)
 
-        assert (await repo.get_status("m1")).value == "online"
+        assert (await repo.get_status("m1")).value == "offline"
 
         from app.models import PresenceStatus
 
@@ -230,6 +230,18 @@ def test_presence_repository_roundtrip_and_default() -> None:
 
     asyncio.run(run())
 
+
+def test_internal_recipients_presence_defaults_to_offline_without_row() -> None:
+    async def run() -> None:
+        sf = await _make_session_factory()
+        actors = SqlActorRepository(sf)
+
+        recipients = await actors.list_internal_recipients()
+        recipients_by_actor = {actor_id: presence for actor_id, _, _, presence in recipients}
+        assert recipients_by_actor["m1"] == "offline"
+        assert recipients_by_actor["owner"] == "offline"
+
+    asyncio.run(run())
 
 def test_queue_repository_summary_filters_and_order() -> None:
     async def run() -> None:

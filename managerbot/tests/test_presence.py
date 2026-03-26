@@ -23,9 +23,28 @@ def test_presence_toggle_updates_backend_state() -> None:
         delivery_gateway=FakeDeliveryGateway(),
     )
 
-    new_status = asyncio.run(service.toggle_presence(actor))
-    assert new_status == PresenceStatus.AWAY
-    assert asyncio.run(presence.get_status(actor.actor_id)) == PresenceStatus.AWAY
+    status_before = asyncio.run(presence.get_status(actor.actor_id))
+    assert status_before == PresenceStatus.OFFLINE
+
+    first = asyncio.run(service.toggle_presence(actor))
+    assert first == PresenceStatus.ONLINE
+    assert asyncio.run(presence.get_status(actor.actor_id)) == PresenceStatus.ONLINE
 
     second = asyncio.run(service.toggle_presence(actor))
-    assert second == PresenceStatus.ONLINE
+    assert second == PresenceStatus.AWAY
+    assert asyncio.run(presence.get_status(actor.actor_id)) == PresenceStatus.AWAY
+
+
+def test_hub_view_uses_offline_default_presence() -> None:
+    actor = ManagerActor(uuid4(), 1, "Manager", SystemRole.MANAGER)
+    presence = FakePresenceRepository()
+    service = ManagerSurfaceService(
+        FakeQueueRepository({}),
+        FakeCaseRepository({}),
+        presence,
+        delivery_gateway=FakeDeliveryGateway(),
+    )
+
+    status, counts = asyncio.run(service.hub_view(actor))
+    assert status == PresenceStatus.OFFLINE
+    assert counts == {}

@@ -74,6 +74,24 @@ def test_notification_dedupe_new_case_once() -> None:
     assert asyncio.run(service.run_once()) == 0
 
 
+def test_case_visible_does_not_target_manager_without_presence_row() -> None:
+    event = NotificationEvent(
+        event_key="case_visible:c2:1",
+        kind="case_visible",
+        case_id=uuid4(),
+        case_display_number=102,
+        assigned_manager_actor_id=None,
+    )
+    recipients = FakeRecipients([
+        ("owner", 1, "OWNER", PresenceStatus.ONLINE.value),
+        ("m1", 2, "MANAGER", PresenceStatus.OFFLINE.value),
+    ])
+    sink = FakeSink()
+    service = ManagerNotificationService(FakeEventsRepo([event]), recipients, sink, FakeDedupe(), NotificationPolicy())
+
+    asyncio.run(service.run_once())
+    assert {uid for uid, _ in sink.sent} == {1}
+
 def test_new_inbound_busy_manager_falls_back_to_owner() -> None:
     assigned_actor_id = str(uuid4())
     event = NotificationEvent(
