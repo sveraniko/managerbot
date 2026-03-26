@@ -236,6 +236,9 @@ class AIReaderService:
         )
         return AIReaderResult(ok=True, analysis=analysis, model=self._config.model)
 
+    def build_packet(self, detail: CaseDetail, *, sla_state: str) -> AIReaderPacket:
+        return self._packet_builder.build(detail, sla_state=sla_state)
+
 
 def _reader_system_prompt() -> str:
     return (

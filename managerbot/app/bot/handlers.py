@@ -7,10 +7,23 @@ from aiogram.filters import CommandStart
 from aiogram.types import CallbackQuery, Message
 
 from app.bot.callbacks import MBCallback
-from app.bot.keyboards import case_keyboard, compose_keyboard, hub_keyboard, queue_keyboard, reply_preview_keyboard
+from app.bot.keyboards import (
+    case_keyboard,
+    compose_keyboard,
+    hub_keyboard,
+    note_preview_keyboard,
+    queue_keyboard,
+    reply_preview_keyboard,
+)
 from app.bot.panel_manager import PanelManager
 from app.services.access import AccessService
-from app.services.ai_state import analysis_for_case, bind_ai_result, clear_ai_snapshot
+from app.services.ai_state import (
+    analysis_for_case,
+    bind_ai_recommendation,
+    bind_ai_result,
+    clear_ai_snapshot,
+    recommendation_for_case,
+)
 from app.services.compose import ComposeStateService
 from app.services.manager_surface import ManagerSurfaceService
 from app.services.navigation import NavigationService
@@ -54,7 +67,18 @@ def build_router(
         detail = await surface_service.case_detail(actor, state.selected_case_id)
         if detail:
             ai_analysis, ai_error = analysis_for_case(state, detail.case_id)
-            await panel_manager.render(message, render_case_detail(detail, ai_analysis=ai_analysis, ai_error=ai_error), case_keyboard())
+            ai_recommendation, ai_recommendation_error = recommendation_for_case(state, detail.case_id)
+            await panel_manager.render(
+                message,
+                render_case_detail(
+                    detail,
+                    ai_analysis=ai_analysis,
+                    ai_error=ai_error,
+                    ai_recommendation=ai_recommendation,
+                    ai_recommendation_error=ai_recommendation_error,
+                ),
+                case_keyboard(has_ai_recommendation=ai_recommendation is not None),
+            )
 
     @router.message(F.text)
     async def compose_input(message: Message) -> None:
@@ -88,9 +112,12 @@ def build_router(
             )
             await panel_manager.render(message, preview, reply_preview_keyboard())
         else:
-            await surface_service.save_internal_note(actor, state.compose_case_id, state.compose_draft_text)
-            compose_service.cancel(state)
-            await render_case(message, actor, state)
+            note_preview = (
+                "Internal note preview:\n\n"
+                f"{state.compose_draft_text}\n\n"
+                "Tap Save note draft to persist."
+            )
+            await panel_manager.render(message, note_preview, note_preview_keyboard())
         await session_store.set(message.from_user.id, state)
 
     @router.callback_query(MBCallback.filter())
@@ -131,14 +158,36 @@ def build_router(
                 await callback.answer("Case not found", show_alert=True)
             else:
                 ai_analysis, ai_error = analysis_for_case(state, detail.case_id)
-                await panel_manager.render(msg, render_case_detail(detail, ai_analysis=ai_analysis, ai_error=ai_error), case_keyboard())
+                ai_recommendation, ai_recommendation_error = recommendation_for_case(state, detail.case_id)
+                await panel_manager.render(
+                    msg,
+                    render_case_detail(
+                        detail,
+                        ai_analysis=ai_analysis,
+                        ai_error=ai_error,
+                        ai_recommendation=ai_recommendation,
+                        ai_recommendation_error=ai_recommendation_error,
+                    ),
+                    case_keyboard(has_ai_recommendation=ai_recommendation is not None),
+                )
         elif callback_data.action == "claim":
             if state.selected_case_id:
                 await surface_service.claim_case(actor, state.selected_case_id)
                 detail = await surface_service.case_detail(actor, state.selected_case_id)
                 if detail:
                     ai_analysis, ai_error = analysis_for_case(state, detail.case_id)
-                    await panel_manager.render(msg, render_case_detail(detail, ai_analysis=ai_analysis, ai_error=ai_error), case_keyboard())
+                    ai_recommendation, ai_recommendation_error = recommendation_for_case(state, detail.case_id)
+                    await panel_manager.render(
+                        msg,
+                        render_case_detail(
+                            detail,
+                            ai_analysis=ai_analysis,
+                            ai_error=ai_error,
+                            ai_recommendation=ai_recommendation,
+                            ai_recommendation_error=ai_recommendation_error,
+                        ),
+                        case_keyboard(has_ai_recommendation=ai_recommendation is not None),
+                    )
         elif callback_data.action == "escalate_owner":
             if state.selected_case_id:
                 ok = await surface_service.escalate_to_owner(actor, state.selected_case_id)
@@ -146,7 +195,19 @@ def build_router(
                 if detail:
                     prefix = "Escalated to owner.\n\n" if ok else "Escalation failed.\n\n"
                     ai_analysis, ai_error = analysis_for_case(state, detail.case_id)
-                    await panel_manager.render(msg, prefix + render_case_detail(detail, ai_analysis=ai_analysis, ai_error=ai_error), case_keyboard())
+                    ai_recommendation, ai_recommendation_error = recommendation_for_case(state, detail.case_id)
+                    await panel_manager.render(
+                        msg,
+                        prefix
+                        + render_case_detail(
+                            detail,
+                            ai_analysis=ai_analysis,
+                            ai_error=ai_error,
+                            ai_recommendation=ai_recommendation,
+                            ai_recommendation_error=ai_recommendation_error,
+                        ),
+                        case_keyboard(has_ai_recommendation=ai_recommendation is not None),
+                    )
         elif callback_data.action == "reply_start":
             if not state.selected_case_id:
                 await callback.answer("Open a case first", show_alert=True)
@@ -176,7 +237,19 @@ def build_router(
                 detail = await surface_service.case_detail(actor, state.selected_case_id)
                 if detail:
                     ai_analysis, ai_error = analysis_for_case(state, detail.case_id)
-                    await panel_manager.render(msg, f"{result_notice}\n\n{render_case_detail(detail, ai_analysis=ai_analysis, ai_error=ai_error)}", case_keyboard())
+                    ai_recommendation, ai_recommendation_error = recommendation_for_case(state, detail.case_id)
+                    await panel_manager.render(
+                        msg,
+                        f"{result_notice}\n\n"
+                        + render_case_detail(
+                            detail,
+                            ai_analysis=ai_analysis,
+                            ai_error=ai_error,
+                            ai_recommendation=ai_recommendation,
+                            ai_recommendation_error=ai_recommendation_error,
+                        ),
+                        case_keyboard(has_ai_recommendation=ai_recommendation is not None),
+                    )
         elif callback_data.action == "reply_edit":
             if state.compose_mode != "reply" or not state.compose_case_id:
                 await callback.answer("Reply compose is not active.", show_alert=True)
@@ -191,7 +264,18 @@ def build_router(
             detail = await surface_service.case_detail(actor, state.selected_case_id) if state.selected_case_id else None
             if detail:
                 ai_analysis, ai_error = analysis_for_case(state, detail.case_id)
-                await panel_manager.render(msg, render_case_detail(detail, ai_analysis=ai_analysis, ai_error=ai_error), case_keyboard())
+                ai_recommendation, ai_recommendation_error = recommendation_for_case(state, detail.case_id)
+                await panel_manager.render(
+                    msg,
+                    render_case_detail(
+                        detail,
+                        ai_analysis=ai_analysis,
+                        ai_error=ai_error,
+                        ai_recommendation=ai_recommendation,
+                        ai_recommendation_error=ai_recommendation_error,
+                    ),
+                    case_keyboard(has_ai_recommendation=ai_recommendation is not None),
+                )
             else:
                 presence, counts = await surface_service.hub_view(actor)
                 await panel_manager.render(msg, render_hub(actor, presence, counts), hub_keyboard())
@@ -200,7 +284,48 @@ def build_router(
             detail = await surface_service.case_detail(actor, state.selected_case_id) if state.selected_case_id else None
             if detail:
                 ai_analysis, ai_error = analysis_for_case(state, detail.case_id)
-                await panel_manager.render(msg, render_case_detail(detail, ai_analysis=ai_analysis, ai_error=ai_error), case_keyboard())
+                ai_recommendation, ai_recommendation_error = recommendation_for_case(state, detail.case_id)
+                await panel_manager.render(
+                    msg,
+                    render_case_detail(
+                        detail,
+                        ai_analysis=ai_analysis,
+                        ai_error=ai_error,
+                        ai_recommendation=ai_recommendation,
+                        ai_recommendation_error=ai_recommendation_error,
+                    ),
+                    case_keyboard(has_ai_recommendation=ai_recommendation is not None),
+                )
+        elif callback_data.action == "note_save_draft":
+            if state.compose_mode != "note" or not state.compose_case_id or not state.compose_draft_text:
+                await callback.answer("No note draft to save.", show_alert=True)
+            else:
+                await surface_service.save_internal_note(actor, state.compose_case_id, state.compose_draft_text)
+                compose_service.cancel(state)
+                detail = await surface_service.case_detail(actor, state.selected_case_id)
+                if detail:
+                    ai_analysis, ai_error = analysis_for_case(state, detail.case_id)
+                    ai_recommendation, ai_recommendation_error = recommendation_for_case(state, detail.case_id)
+                    await panel_manager.render(
+                        msg,
+                        render_case_detail(
+                            detail,
+                            ai_analysis=ai_analysis,
+                            ai_error=ai_error,
+                            ai_recommendation=ai_recommendation,
+                            ai_recommendation_error=ai_recommendation_error,
+                        ),
+                        case_keyboard(has_ai_recommendation=ai_recommendation is not None),
+                    )
+        elif callback_data.action == "note_edit":
+            if state.compose_mode != "note" or not state.compose_case_id:
+                await callback.answer("Note compose is not active.", show_alert=True)
+            else:
+                await panel_manager.render(
+                    msg,
+                    "Edit internal note: send updated text in the next message.",
+                    compose_keyboard(),
+                )
         elif callback_data.action == "ai_analyze":
             if not state.selected_case_id:
                 await callback.answer("Open a case first", show_alert=True)
@@ -209,8 +334,62 @@ def build_router(
                 if detail:
                     ai_result = await surface_service.analyze_case_reader(detail)
                     bind_ai_result(state, detail.case_id, ai_result.analysis, ai_result.error_message)
+                    recommendation_result = await surface_service.recommend_case(detail)
+                    bind_ai_recommendation(
+                        state,
+                        detail.case_id,
+                        recommendation_result.recommendation,
+                        recommendation_result.error_message,
+                    )
                     ai_analysis, ai_error = analysis_for_case(state, detail.case_id)
-                    await panel_manager.render(msg, render_case_detail(detail, ai_analysis=ai_analysis, ai_error=ai_error), case_keyboard())
+                    ai_recommendation, ai_recommendation_error = recommendation_for_case(state, detail.case_id)
+                    await panel_manager.render(
+                        msg,
+                        render_case_detail(
+                            detail,
+                            ai_analysis=ai_analysis,
+                            ai_error=ai_error,
+                            ai_recommendation=ai_recommendation,
+                            ai_recommendation_error=ai_recommendation_error,
+                        ),
+                        case_keyboard(has_ai_recommendation=ai_recommendation is not None),
+                    )
+        elif callback_data.action == "ai_use_reply_draft":
+            if not state.selected_case_id:
+                await callback.answer("Open a case first", show_alert=True)
+            else:
+                recommendation, _ = recommendation_for_case(state, state.selected_case_id)
+                if not recommendation or state.ai_case_id != state.selected_case_id:
+                    await callback.answer("No valid AI recommendation for this case.", show_alert=True)
+                else:
+                    if not compose_service.start_reply_from_ai(state, state.selected_case_id, recommendation.draft_reply):
+                        await callback.answer("AI reply draft is unavailable for this case.", show_alert=True)
+                    else:
+                        detail = await surface_service.case_detail(actor, state.selected_case_id)
+                        if detail:
+                            await panel_manager.render(
+                                msg,
+                                f"AI reply draft loaded for Case #{detail.case_display_number}.\n\n{state.compose_draft_text}",
+                                reply_preview_keyboard(),
+                            )
+        elif callback_data.action == "ai_use_note_draft":
+            if not state.selected_case_id:
+                await callback.answer("Open a case first", show_alert=True)
+            else:
+                recommendation, _ = recommendation_for_case(state, state.selected_case_id)
+                if not recommendation or state.ai_case_id != state.selected_case_id:
+                    await callback.answer("No valid AI recommendation for this case.", show_alert=True)
+                else:
+                    if not compose_service.start_note_from_ai(state, state.selected_case_id, recommendation.draft_internal_note):
+                        await callback.answer("AI note draft is unavailable for this case.", show_alert=True)
+                    else:
+                        await panel_manager.render(
+                            msg,
+                            "AI internal note draft loaded:\n\n"
+                            f"{state.compose_draft_text}\n\n"
+                            "Tap Save note draft to persist or Edit to modify.",
+                            note_preview_keyboard(),
+                        )
         elif callback_data.action == "back":
             state = navigation_service.back(state)
             if state.panel_key.startswith("queue:") and state.queue_key:
@@ -224,7 +403,18 @@ def build_router(
                 detail = await surface_service.case_detail(actor, state.selected_case_id)
                 if detail:
                     ai_analysis, ai_error = analysis_for_case(state, detail.case_id)
-                    await panel_manager.render(msg, render_case_detail(detail, ai_analysis=ai_analysis, ai_error=ai_error), case_keyboard())
+                    ai_recommendation, ai_recommendation_error = recommendation_for_case(state, detail.case_id)
+                    await panel_manager.render(
+                        msg,
+                        render_case_detail(
+                            detail,
+                            ai_analysis=ai_analysis,
+                            ai_error=ai_error,
+                            ai_recommendation=ai_recommendation,
+                            ai_recommendation_error=ai_recommendation_error,
+                        ),
+                        case_keyboard(has_ai_recommendation=ai_recommendation is not None),
+                    )
             else:
                 presence, counts = await surface_service.hub_view(actor)
                 await panel_manager.render(msg, render_hub(actor, presence, counts), hub_keyboard())

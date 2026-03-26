@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     ai_max_input_chars: int = Field(default=6000)
     ai_max_output_tokens: int = Field(default=500)
     ai_include_internal_notes: bool = Field(default=True)
+    ai_recommender_enabled: bool = Field(default=False)
+    ai_recommender_max_output_tokens: int = Field(default=700)
 
 
 def get_settings() -> Settings:
