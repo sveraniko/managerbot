@@ -65,7 +65,7 @@ def test_sql_hot_task_bucket_membership_and_ordering() -> None:
             old = (now - timedelta(minutes=30)).isoformat()
             await session.execute(
                 text(
-                    "update ops.quote_case_ops_states set waiting_state='waiting_manager', assigned_manager_actor_id='m1', priority='high', sla_due_at=:near, last_customer_message_at=:old where quote_case_id='c2'"
+                    "update ops.quote_case_ops_states set waiting_state='waiting_manager', assigned_manager_actor_id='m1', priority='vip', sla_due_at=:near, last_customer_message_at=:old where quote_case_id='c2'"
                 ),
                 {"near": near, "old": old},
             )
@@ -105,9 +105,9 @@ def test_sql_hot_task_bucket_membership_and_ordering() -> None:
         sla_cases = [i.case_display_number for i in by_key["sla_at_risk"].items]
         assert sla_cases[:2] == [103, 102]
 
-        # Urgent/escalated lane keeps urgent+escalated case first.
+        # Urgent/VIP/escalated lane includes VIP and keeps urgent+escalated case first.
         urgent_cases = [i.case_display_number for i in by_key["urgent_escalated"].items]
-        assert urgent_cases[0] == 103
+        assert urgent_cases[:2] == [103, 102]
 
         # Failed delivery picks case with failed attempt.
         failed_cases = [i.case_display_number for i in by_key["failed_delivery"].items]
@@ -127,6 +127,6 @@ def test_sql_hot_task_bucket_membership_and_ordering() -> None:
 
         urgent_list = await repo.list_queue("urgent_escalated", "m1", 0, 10)
         assert urgent_list
-        assert urgent_list[0].case_display_number == 103
+        assert [item.case_display_number for item in urgent_list[:2]] == [103, 102]
 
     asyncio.run(run())

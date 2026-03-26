@@ -291,8 +291,18 @@ def test_queue_archive_search_and_priority_controls() -> None:
         updated = await case_repo.update_priority("c1", "m1", "vip")
         assert updated is True
 
+        async with sf() as session:
+            await session.execute(text("update ops.quote_case_ops_states set priority='high' where quote_case_id='c2'"))
+            await session.commit()
+
+        top_tier = await queue_repo.list_queue("urgent", "m1", 0, 10, QueueFilters(lifecycle_scope="all"))
+        assert [item.case_display_number for item in top_tier] == [101]
+
         urgent = await queue_repo.list_queue("urgent_escalated", "m1", 0, 10, QueueFilters(lifecycle_scope="all"))
         assert urgent[0].case_display_number == 101
+
+        search = await queue_repo.search_cases("m1", "cust", 10, QueueFilters(lifecycle_scope="all"))
+        assert [item.case_display_number for item in search[:2]] == [101, 102]
 
     asyncio.run(run())
 
@@ -358,6 +368,23 @@ def test_escalate_to_owner_updates_state_and_assignment_event() -> None:
             event = (await session.execute(text("select event_kind, to_manager_actor_id from ops.quote_case_assignment_events where quote_case_id='c1' order by event_seq desc limit 1"))).first()
             assert event.event_kind == "escalated_to_owner"
             assert event.to_manager_actor_id == "owner"
+
+    asyncio.run(run())
+
+
+def test_escalate_to_owner_preserves_vip_priority() -> None:
+    async def run() -> None:
+        sf = await _make_session_factory()
+        cases = SqlCaseRepository(sf)
+
+        updated = await cases.update_priority("c1", "m1", "vip")
+        assert updated is True
+        escalated = await cases.escalate_to_owner("c1", "m1")
+        assert escalated is True
+
+        async with sf() as session:
+            state = (await session.execute(text("select priority from ops.quote_case_ops_states where quote_case_id='c1'"))).first()
+            assert state.priority == "vip"
 
     asyncio.run(run())
 
