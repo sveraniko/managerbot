@@ -123,7 +123,7 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def on_startup() -> None:
-        logger.info("managerbot_startup")
+        _log_startup_config(settings)
         app.state.polling_task = asyncio.create_task(dp.start_polling(bot, handle_signals=False))
         notification_service = ManagerNotificationService(
             events_repo=SqlNotificationRepository(session_factory),
@@ -159,3 +159,32 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
+
+def _log_startup_config(settings) -> None:
+    handoff_configured = [
+        name
+        for name, value in {
+            "production": settings.handoff_production_chat_id,
+            "warehouse": settings.handoff_warehouse_chat_id,
+            "accountant": settings.handoff_accountant_chat_id,
+        }.items()
+        if value is not None
+    ]
+    ai_runtime_enabled = bool(settings.ai_enabled and settings.ai_api_key)
+    logger.info(
+        "managerbot_startup",
+        queue_page_size=settings.queue_page_size,
+        notification_poll_seconds=settings.notification_poll_seconds,
+        ai_enabled=settings.ai_enabled,
+        ai_runtime_enabled=ai_runtime_enabled,
+        ai_reader_enabled=settings.ai_reader_enabled,
+        ai_recommender_enabled=settings.ai_recommender_enabled,
+        handoff_targets=handoff_configured,
+    )
+    if settings.ai_enabled and not settings.ai_api_key:
+        logger.warning("managerbot_ai_disabled_missing_api_key")
+    if not settings.ai_enabled and (settings.ai_reader_enabled or settings.ai_recommender_enabled):
+        logger.warning("managerbot_ai_features_disabled_by_root_flag")
+    if not handoff_configured:
+        logger.info("managerbot_handoff_targets_not_configured")

@@ -21,9 +21,10 @@ def hub_keyboard(buckets: list[HotTaskBucket]) -> InlineKeyboardMarkup:
                     )
                 ]
             )
-        rows.append(
-            [InlineKeyboardButton(text=f"Open {bucket.title}", callback_data=MBCallback(action="queue", value=bucket.queue_key).pack())]
-        )
+        if bucket.items:
+            rows.append(
+                [InlineKeyboardButton(text=f"Open {bucket.title}", callback_data=MBCallback(action="queue", value=bucket.queue_key).pack())]
+            )
     rows.extend(
         [
             [InlineKeyboardButton(text="New/Unassigned", callback_data=MBCallback(action="queue", value="new").pack())],
@@ -38,9 +39,10 @@ def hub_keyboard(buckets: list[HotTaskBucket]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def queue_keyboard(items: list[QueueItem]) -> InlineKeyboardMarkup:
+def queue_keyboard(items: list[QueueItem], *, has_more: bool = True) -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton(text=f"Case #{item.case_display_number}", callback_data=MBCallback(action="case", value=str(item.case_id)).pack())] for item in items]
-    rows.append([InlineKeyboardButton(text="Load more", callback_data=MBCallback(action="load_more").pack())])
+    if has_more:
+        rows.append([InlineKeyboardButton(text="Load more", callback_data=MBCallback(action="load_more").pack())])
     rows.append([InlineKeyboardButton(text="Search", callback_data=MBCallback(action="search_start").pack())])
     rows.append([InlineKeyboardButton(text="Filters", callback_data=MBCallback(action="filters_open").pack())])
     rows.append([InlineKeyboardButton(text="Back", callback_data=MBCallback(action="back").pack()), InlineKeyboardButton(text="Home", callback_data=MBCallback(action="home").pack())])
@@ -52,6 +54,7 @@ def case_keyboard(
     has_ai_recommendation: bool = False,
     ai_low_confidence: bool = False,
     has_order_actions: bool = False,
+    has_contact_actions: bool = True,
 ) -> InlineKeyboardMarkup:
     ai_rows = []
     if has_ai_recommendation:
@@ -76,8 +79,9 @@ def case_keyboard(
             ],
             [InlineKeyboardButton(text="Reply to customer", callback_data=MBCallback(action="reply_start").pack())],
             [InlineKeyboardButton(text="Add internal note", callback_data=MBCallback(action="note_start").pack())],
-            [InlineKeyboardButton(text="Contact actions", callback_data=MBCallback(action="contact_panel").pack())],
     ]
+    if has_contact_actions:
+        rows.append([InlineKeyboardButton(text="Contact actions", callback_data=MBCallback(action="contact_panel").pack())])
     if has_order_actions:
         rows.append([InlineKeyboardButton(text="Order summary / handoff", callback_data=MBCallback(action="order_summary_open").pack())])
     rows.extend(

@@ -95,7 +95,7 @@ def test_order_pdf_absence_and_target_configuration_do_not_create_dead_actions()
     assert "Send to warehouse" not in texts
     assert "Send to accountant" not in texts
 
-    case_kb = case_keyboard(has_order_actions=True)
+    case_kb = case_keyboard(has_order_actions=True, has_contact_actions=True)
     assert "Order summary / handoff" in _texts(case_kb)
 
 

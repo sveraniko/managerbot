@@ -18,6 +18,7 @@ def test_home_queue_back_refresh_state_determinism() -> None:
 
     nav.back(state)
     assert state.panel_key == "queue:new"
+    assert state.back_panel_key is None
     assert state.queue_key == "new"
 
     nav.go_home(state)

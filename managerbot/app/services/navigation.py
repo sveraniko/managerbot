@@ -19,13 +19,18 @@ class NavigationService:
         state.ai_case_id = None
         state.ai_analysis = None
         state.ai_error = None
+        state.ai_analysis_meta = None
+        state.ai_recommendation = None
+        state.ai_recommendation_error = None
+        state.ai_recommendation_meta = None
         state.search_mode = False
         state.search_query = None
         return state
 
     def back(self, state: ManagerSessionState) -> ManagerSessionState:
         if state.back_panel_key:
-            state.panel_key, state.back_panel_key = state.back_panel_key, state.panel_key
+            state.panel_key = state.back_panel_key
+            state.back_panel_key = None
         else:
             state.panel_key = "hub:home"
         return state
