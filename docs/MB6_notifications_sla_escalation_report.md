@@ -87,3 +87,7 @@ MB6 assumes canonical ops fields are present (including `sla_due_at` on ops stat
 - AI copilot work remains for MB7.
 - Group topics bridge remains for MB8.
 - Rich retry workflows for failed outbound delivery remain intentionally small/deferred.
+
+
+## Post-MB6 clarification (MB6a)
+MB6a hardens canonical presence semantics so that **missing manager presence rows default to `offline` everywhere** (repository, hub rendering input, recipient targeting). This removes the transient MB6 inconsistency where one path could infer `online` while notification targeting treated the same actor as effectively offline.

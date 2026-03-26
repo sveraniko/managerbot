@@ -26,7 +26,7 @@ class FakePresenceRepository:
         self._states: dict[UUID, PresenceStatus] = {}
 
     async def get_status(self, actor_id: UUID):
-        return self._states.get(actor_id, PresenceStatus.ONLINE)
+        return self._states.get(actor_id, PresenceStatus.OFFLINE)
 
     async def set_status(self, actor_id: UUID, status: PresenceStatus) -> None:
         self._states[actor_id] = status
