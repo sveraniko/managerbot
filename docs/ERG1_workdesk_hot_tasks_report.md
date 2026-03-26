@@ -34,7 +34,12 @@ AI does not influence bucket membership or ordering.
 
 ## Case opening from workdesk
 - Every rendered hot-task item has a direct `case` callback action and opens case detail deterministically.
-- Bucket-level “Open ...” actions route to existing queue lanes for compact “see more / open queue” behavior.
+- Bucket-level “Open ...” actions are semantically strict:
+  - `Needs reply now` -> `waiting_me`
+  - `New business` -> `new`
+  - `SLA at risk` -> `sla_risk` (bucket-specific lane)
+  - `Urgent / VIP / escalated` -> `urgent_escalated` (bucket-specific lane)
+  - `Failed delivery` -> `failed_delivery` (bucket-specific lane)
 
 ## Compactness / see-more UX decision
 Chosen pattern:

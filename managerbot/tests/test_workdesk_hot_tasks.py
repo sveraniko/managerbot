@@ -28,11 +28,19 @@ def _item(display: int) -> HotTaskItem:
 
 
 def test_hub_keyboard_exposes_hot_task_case_open_and_open_queue() -> None:
-    bucket = HotTaskBucket(HotTaskBucketKey.NEEDS_REPLY_NOW, "Needs reply now", "waiting_me", [_item(501)])
-    kb = hub_keyboard([bucket])
+    buckets = [
+        HotTaskBucket(HotTaskBucketKey.NEEDS_REPLY_NOW, "Needs reply now", "waiting_me", [_item(501)]),
+        HotTaskBucket(HotTaskBucketKey.SLA_AT_RISK, "SLA at risk", "sla_risk", [_item(502)]),
+        HotTaskBucket(HotTaskBucketKey.URGENT_ESCALATED, "Urgent / VIP / escalated", "urgent_escalated", [_item(503)]),
+        HotTaskBucket(HotTaskBucketKey.FAILED_DELIVERY, "Failed delivery", "failed_delivery", [_item(504)]),
+    ]
+    kb = hub_keyboard(buckets)
     packed = [button.callback_data for row in kb.inline_keyboard for button in row]
     assert any(":case:" in data for data in packed)
     assert any(":queue:waiting_me" in data for data in packed)
+    assert any(":queue:sla_risk" in data for data in packed)
+    assert any(":queue:urgent_escalated" in data for data in packed)
+    assert any(":queue:failed_delivery" in data for data in packed)
 
 
 def test_navigation_state_stays_clean_for_home_refresh() -> None:
@@ -104,5 +112,21 @@ def test_sql_hot_task_bucket_membership_and_ordering() -> None:
         # Failed delivery picks case with failed attempt.
         failed_cases = [i.case_display_number for i in by_key["failed_delivery"].items]
         assert failed_cases[0] == 102
+
+        # Bucket-level open actions now route to truthful list keys.
+        assert by_key["sla_at_risk"].queue_key == "sla_risk"
+        assert by_key["urgent_escalated"].queue_key == "urgent_escalated"
+        assert by_key["failed_delivery"].queue_key == "failed_delivery"
+
+        # Queue list views are aligned and deterministic for bucket semantics.
+        sla_list = await repo.list_queue("sla_risk", "m1", 0, 10)
+        assert [item.case_display_number for item in sla_list[:2]] == [103, 102]
+
+        failed_list = await repo.list_queue("failed_delivery", "m1", 0, 10)
+        assert [item.case_display_number for item in failed_list] == [102]
+
+        urgent_list = await repo.list_queue("urgent_escalated", "m1", 0, 10)
+        assert urgent_list
+        assert urgent_list[0].case_display_number == 103
 
     asyncio.run(run())

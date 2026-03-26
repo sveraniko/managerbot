@@ -151,9 +151,9 @@ def test_workdesk_rendering_shows_hot_tasks_and_queue_summary() -> None:
     buckets = [
         hot,
         HotTaskBucket(HotTaskBucketKey.NEW_BUSINESS, "New business", "new", []),
-        HotTaskBucket(HotTaskBucketKey.SLA_AT_RISK, "SLA at risk", "waiting_me", []),
-        HotTaskBucket(HotTaskBucketKey.URGENT_ESCALATED, "Urgent / VIP / escalated", "urgent", []),
-        HotTaskBucket(HotTaskBucketKey.FAILED_DELIVERY, "Failed delivery", "waiting_me", []),
+        HotTaskBucket(HotTaskBucketKey.SLA_AT_RISK, "SLA at risk", "sla_risk", []),
+        HotTaskBucket(HotTaskBucketKey.URGENT_ESCALATED, "Urgent / VIP / escalated", "urgent_escalated", []),
+        HotTaskBucket(HotTaskBucketKey.FAILED_DELIVERY, "Failed delivery", "failed_delivery", []),
     ]
     rendered = render_hub(
         actor,
