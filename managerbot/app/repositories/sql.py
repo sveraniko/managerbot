@@ -56,7 +56,7 @@ class SqlPresenceRepository:
     async def get_status(self, actor_id):
         async with self._sf() as session:
             row = (await session.execute(text("select presence_status from ops.manager_presence_states where actor_id=:actor_id"), {"actor_id": actor_id})).first()
-        return PresenceStatus(row.presence_status) if row else PresenceStatus.ONLINE
+        return PresenceStatus(row.presence_status) if row else PresenceStatus.OFFLINE
 
     async def set_status(self, actor_id, status: PresenceStatus) -> None:
         async with self._sf() as session:
