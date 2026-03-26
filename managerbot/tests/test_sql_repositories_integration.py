@@ -160,11 +160,12 @@ async def _make_session_factory() -> async_sessionmaker:
                 insert into core.quote_cases(id, display_number, status, customer_label, customer_actor_id, customer_telegram_chat_id) values
                 ('c1', 101, 'open', 'Acme', 'cust', 40001),
                 ('c2', 102, 'open', 'Beta', 'cust', 40002),
-                ('c3', 103, 'open', 'Gamma', 'cust', 40003)
+                ('c3', 103, 'open', 'Gamma', 'cust', 40003),
+                ('c4', 104, 'closed', 'Archive Co', 'cust', 40004)
                 """
             )
         )
-        await conn.execute(text("insert into core.orders(id, source_quote_case_id, display_number) values ('o1', 'c1', 9001)"))
+        await conn.execute(text("insert into core.orders(id, source_quote_case_id, display_number) values ('o1', 'c1', 9001), ('o2', 'c2', 9002)"))
 
         now = datetime.now(timezone.utc).isoformat()
         await conn.execute(
@@ -177,7 +178,8 @@ async def _make_session_factory() -> async_sessionmaker:
                 ) values
                 ('s1', 'c1', 'new', 'none', 'high', null, null, null, 0, null, :now, :now),
                 ('s2', 'c2', 'active', 'waiting_manager', 'urgent', 'm1', 'm1', :now, 0, :now, :now, :now),
-                ('s3', 'c3', 'active', 'waiting_customer', 'normal', 'm1', 'm1', :now, 1, null, :now, :now)
+                ('s3', 'c3', 'active', 'waiting_customer', 'normal', 'm1', 'm1', :now, 1, null, :now, :now),
+                ('s4', 'c4', 'closed', 'waiting_customer', 'normal', 'm1', 'm1', :now, 0, null, :now, :now)
                 """
             ),
             {"now": now},
@@ -259,6 +261,38 @@ def test_queue_repository_summary_filters_and_order() -> None:
 
         waiting_customer = await repo.list_queue("waiting_customer", "m1", 0, 10)
         assert [item.case_display_number for item in waiting_customer] == [103]
+
+    asyncio.run(run())
+
+
+def test_queue_archive_search_and_priority_controls() -> None:
+    async def run() -> None:
+        sf = await _make_session_factory()
+        queue_repo = SqlQueueRepository(sf)
+        case_repo = SqlCaseRepository(sf)
+        from app.models import QueueFilters
+
+        archive = await queue_repo.list_queue("archive", "m1", 0, 10, QueueFilters(lifecycle_scope="archive"))
+        assert [item.case_display_number for item in archive] == [104]
+        assert archive[0].is_archived is True
+
+        by_case = await queue_repo.search_cases("m1", "Q-101", 10, QueueFilters(lifecycle_scope="all"))
+        assert by_case and by_case[0].case_display_number == 101
+
+        by_order = await queue_repo.search_cases("m1", "9002", 10, QueueFilters(lifecycle_scope="all"))
+        assert by_order and by_order[0].case_display_number == 102
+
+        by_customer = await queue_repo.search_cases("m1", "Archive", 10, QueueFilters(lifecycle_scope="all"))
+        assert by_customer and by_customer[0].is_archived is True
+
+        none = await queue_repo.search_cases("m1", "missing-string", 10, QueueFilters(lifecycle_scope="all"))
+        assert none == []
+
+        updated = await case_repo.update_priority("c1", "m1", "vip")
+        assert updated is True
+
+        urgent = await queue_repo.list_queue("urgent_escalated", "m1", 0, 10, QueueFilters(lifecycle_scope="all"))
+        assert urgent[0].case_display_number == 101
 
     asyncio.run(run())
 

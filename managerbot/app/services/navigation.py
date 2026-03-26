@@ -19,6 +19,8 @@ class NavigationService:
         state.ai_case_id = None
         state.ai_analysis = None
         state.ai_error = None
+        state.search_mode = False
+        state.search_query = None
         return state
 
     def back(self, state: ManagerSessionState) -> ManagerSessionState:

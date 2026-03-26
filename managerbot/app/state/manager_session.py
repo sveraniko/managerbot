@@ -30,6 +30,14 @@ class ManagerSessionState:
     ai_recommendation: dict[str, Any] | None = None
     ai_recommendation_error: str | None = None
     ai_recommendation_meta: dict[str, Any] | None = None
+    search_mode: bool = False
+    search_query: str | None = None
+    filter_assignment_scope: str = "any"
+    filter_waiting_scope: str = "any"
+    filter_priority_scope: str = "any"
+    filter_sla_scope: str = "any"
+    filter_escalation_scope: str = "any"
+    filter_lifecycle_scope: str = "active"
 
 
 class ManagerSessionStore(Protocol):

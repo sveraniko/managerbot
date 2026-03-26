@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.models import CaseDetail, HotTaskBucket, ManagerActor, PresenceStatus, QueueItem
+from app.models import CaseDetail, HotTaskBucket, ManagerActor, PresenceStatus, QueueFilters, QueueItem, SearchResultItem
 from app.repositories.contracts import CaseRepository, PresenceRepository, QueueRepository
 from app.services.ai_reader import AIReaderResult, AIReaderService
 from app.services.ai_recommender import AIRecommendationResult, AIRecommenderService
@@ -43,7 +43,17 @@ class ManagerSurfaceService:
     async def queue_page(self, actor: ManagerActor, state: ManagerSessionState) -> list[QueueItem]:
         if not state.queue_key:
             return []
-        return await self._queue_repo.list_queue(state.queue_key, actor.actor_id, state.queue_offset, self._page_size)
+        return await self._queue_repo.list_queue(
+            state.queue_key,
+            actor.actor_id,
+            state.queue_offset,
+            self._page_size,
+            self._filters_from_state(state),
+        )
+
+    async def search_cases(self, actor: ManagerActor, query: str, state: ManagerSessionState, limit: int = 10) -> list[SearchResultItem]:
+        filters = self._filters_from_state(state)
+        return await self._queue_repo.search_cases(actor.actor_id, query, limit, filters)
 
     async def case_detail(self, actor: ManagerActor, case_id) -> CaseDetail | None:
         return await self._case_repo.get_detail(case_id, actor.actor_id)
@@ -59,6 +69,9 @@ class ManagerSurfaceService:
 
     async def escalate_to_owner(self, actor: ManagerActor, case_id) -> bool:
         return await self._case_repo.escalate_to_owner(case_id, actor.actor_id)
+
+    async def update_case_priority(self, actor: ManagerActor, case_id, priority: str) -> bool:
+        return await self._case_repo.update_priority(case_id, actor.actor_id, priority)
 
     def case_sla_state(self, detail: CaseDetail) -> str:
         return self._sla_service.classify(detail.sla_due_at)
@@ -104,3 +117,13 @@ class ManagerSurfaceService:
             return AIRecommendationResult(ok=False, error_message="AI recommender is disabled.")
         packet = self._ai_reader.build_packet(detail, sla_state=self.case_sla_state(detail))
         return await self._ai_recommender.recommend(packet, force_refresh=force_refresh)
+
+    def _filters_from_state(self, state: ManagerSessionState) -> QueueFilters:
+        return QueueFilters(
+            assignment_scope=state.filter_assignment_scope,
+            waiting_scope=state.filter_waiting_scope,
+            priority_scope=state.filter_priority_scope,
+            sla_scope=state.filter_sla_scope,
+            escalation_scope=state.filter_escalation_scope,
+            lifecycle_scope=state.filter_lifecycle_scope,
+        )

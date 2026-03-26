@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 from uuid import uuid4
 
-from app.models import CaseDetail, HotTaskBucket, HotTaskBucketKey, HotTaskItem, ManagerActor, NotificationEvent, PresenceStatus, QueueItem, ThreadEntry
+from app.models import CaseDetail, HotTaskBucket, HotTaskBucketKey, HotTaskItem, ManagerActor, NotificationEvent, PresenceStatus, QueueFilters, QueueItem, SearchResultItem, ThreadEntry
 
 
 class FakeActorRepository:
@@ -39,8 +39,12 @@ class FakeQueueRepository:
     async def summary_counts(self, actor_id: UUID):
         return {k: len(v) for k, v in self.queues.items()}
 
-    async def list_queue(self, queue_key: str, actor_id: UUID, offset: int, limit: int):
-        return self.queues.get(queue_key, [])[offset : offset + limit]
+    async def list_queue(self, queue_key: str, actor_id: UUID, offset: int, limit: int, filters: QueueFilters | None = None):
+        _ = actor_id
+        items = list(self.queues.get(queue_key, []))
+        if filters:
+            items = _apply_filters(items, actor_id, filters)
+        return items[offset : offset + limit]
 
     async def hot_task_buckets(self, actor_id: UUID, item_limit: int) -> list[HotTaskBucket]:
         _ = actor_id
@@ -70,6 +74,31 @@ class FakeQueueRepository:
             ]
             buckets.append(HotTaskBucket(key=key, title=title, queue_key=queue_key, items=items))
         return buckets
+
+    async def search_cases(self, actor_id: UUID, query: str, limit: int, filters: QueueFilters | None = None) -> list[SearchResultItem]:
+        needle = query.strip().lower()
+        matches: list[SearchResultItem] = []
+        for queue_items in self.queues.values():
+            for item in queue_items:
+                if needle and needle not in str(item.case_display_number) and needle not in (item.customer_label or "").lower():
+                    continue
+                if filters and item not in _apply_filters([item], actor_id, filters):
+                    continue
+                matches.append(
+                    SearchResultItem(
+                        case_id=item.case_id,
+                        case_display_number=item.case_display_number,
+                        linked_order_display_number=None,
+                        customer_label=item.customer_label,
+                        operational_status=item.operational_status,
+                        waiting_state=item.waiting_state,
+                        priority=item.priority,
+                        escalation_level=item.escalation_level,
+                        is_archived=item.is_archived,
+                    )
+                )
+        deduped: dict[UUID, SearchResultItem] = {m.case_id: m for m in matches}
+        return sorted(deduped.values(), key=lambda i: (i.case_display_number, i.case_id.hex))[:limit]
 
 
 class FakeCaseRepository:
@@ -132,6 +161,39 @@ class FakeCaseRepository:
         for detail in self.details.values():
             if detail.thread_entries:
                 detail.thread_entries[-1].delivery_status = status
+
+    async def update_priority(self, case_id: UUID, actor_id: UUID, priority: str) -> bool:
+        _ = actor_id
+        detail = self.details.get(case_id)
+        if not detail:
+            return False
+        detail.priority = priority
+        return True
+
+
+def _apply_filters(items: list[QueueItem], actor_id: UUID, filters: QueueFilters) -> list[QueueItem]:
+    filtered = items
+    if filters.assignment_scope == "mine":
+        filtered = [i for i in filtered if i.assigned_manager_actor_id == actor_id]
+    elif filters.assignment_scope == "unassigned":
+        filtered = [i for i in filtered if i.assigned_manager_actor_id is None]
+    if filters.waiting_scope == "waiting_manager":
+        filtered = [i for i in filtered if i.waiting_state in ("none", "waiting_manager", "waiting_owner")]
+    elif filters.waiting_scope == "waiting_customer":
+        filtered = [i for i in filtered if i.waiting_state == "waiting_customer"]
+    if filters.priority_scope == "high_or_urgent":
+        filtered = [i for i in filtered if i.priority in ("high", "urgent", "vip")]
+    elif filters.priority_scope == "urgent_or_vip":
+        filtered = [i for i in filtered if i.priority in ("urgent", "vip")]
+    elif filters.priority_scope == "vip":
+        filtered = [i for i in filtered if i.priority == "vip"]
+    if filters.escalation_scope == "escalated":
+        filtered = [i for i in filtered if i.escalation_level > 0]
+    if filters.lifecycle_scope == "active":
+        filtered = [i for i in filtered if not i.is_archived]
+    elif filters.lifecycle_scope == "archive":
+        filtered = [i for i in filtered if i.is_archived]
+    return filtered
 
 
 class FakeNotificationRepository:
