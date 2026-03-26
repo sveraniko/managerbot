@@ -20,7 +20,9 @@ from app.bot.keyboards import (
     search_input_keyboard,
     search_results_keyboard,
 )
-from app.models import CustomerCard
+import structlog
+
+from app.models import CaseDetail, CustomerCard
 from app.bot.panel_manager import PanelManager
 from app.models import QueueFilters
 from app.services.access import AccessService
@@ -39,6 +41,8 @@ from app.services.rendering import (
     render_search_results,
 )
 from app.state.manager_session import ManagerSessionStore
+
+logger = structlog.get_logger(__name__)
 
 
 def build_router(
@@ -85,8 +89,29 @@ def build_router(
                 has_ai_recommendation=ai_recommendation is not None,
                 ai_low_confidence=low_conf,
                 has_order_actions=has_order(detail),
+                has_contact_actions=_has_contact_actions(detail),
             ),
         )
+
+    async def require_selected_case_detail(
+        callback: CallbackQuery, actor, state, *, action_label: str = "action"
+    ) -> CaseDetail | None:
+        if not state.selected_case_id:
+            await callback.answer("Open a case first.", show_alert=True)
+            return None
+        detail = await surface_service.case_detail(actor, state.selected_case_id)
+        if detail:
+            return detail
+        compose_service.cancel(state)
+        state.selected_case_id = None
+        state.panel_key = "hub:home"
+        state.back_panel_key = None
+        state.search_mode = False
+        state.search_query = None
+        await callback.answer(f"Case is no longer available for {action_label}.", show_alert=True)
+        presence, counts, buckets = await surface_service.hub_view(actor)
+        await panel_manager.render(callback.message, render_hub(actor, presence, counts, buckets), hub_keyboard(buckets))
+        return None
 
     @router.message(CommandStart())
     async def start(message: Message) -> None:
@@ -108,6 +133,10 @@ def build_router(
         state = await session_store.get(message.from_user.id)
         if state.search_mode:
             query = message.text.strip()
+            if not query:
+                await panel_manager.render(message, "Search query is empty. Enter case #, order #, or customer.", search_input_keyboard())
+                await session_store.set(message.from_user.id, state)
+                return
             state.search_query = query
             state.search_mode = False
             state = navigation_service.open_panel(state, "search:results")
@@ -124,12 +153,12 @@ def build_router(
         if compose_service.is_stale(state):
             compose_service.cancel(state)
             await session_store.set(message.from_user.id, state)
-            await message.answer("Compose context expired. Re-open the case and start again.")
+            await panel_manager.render(message, "Compose context expired. Re-open case and start again.", compose_keyboard())
             return
 
         state.compose_draft_text = message.text.strip()
         if not state.compose_draft_text:
-            await message.answer("Text is empty. Send text or cancel.")
+            await panel_manager.render(message, "Text is empty. Send text or cancel.", compose_keyboard())
             return
 
         if state.compose_mode == "reply":
@@ -168,11 +197,21 @@ def build_router(
             state.queue_key = callback_data.value
             state.queue_offset = 0
             items = await surface_service.queue_page(actor, state)
-            await panel_manager.render(msg, render_queue(callback_data.value, items, state.queue_offset, _filters_from_state(state)), queue_keyboard(items))
+            has_more = len(items) >= surface_service._page_size
+            await panel_manager.render(
+                msg,
+                render_queue(callback_data.value, items, state.queue_offset, _filters_from_state(state)),
+                queue_keyboard(items, has_more=has_more),
+            )
         elif callback_data.action == "load_more":
             state.queue_offset += surface_service._page_size
             items = await surface_service.queue_page(actor, state)
-            await panel_manager.render(msg, render_queue(state.queue_key or "", items, state.queue_offset, _filters_from_state(state)), queue_keyboard(items))
+            has_more = len(items) >= surface_service._page_size
+            await panel_manager.render(
+                msg,
+                render_queue(state.queue_key or "", items, state.queue_offset, _filters_from_state(state)),
+                queue_keyboard(items, has_more=has_more),
+            )
         elif callback_data.action == "case":
             state = navigation_service.open_panel(state, "case:detail")
             next_case_id = UUID(callback_data.value)
@@ -237,12 +276,10 @@ def build_router(
                 compose_service.start_note(state, state.selected_case_id)
                 await panel_manager.render(msg, "Compose internal note.\nSend note text in the next message.\nThis note is internal-only.", compose_keyboard())
         elif callback_data.action == "contact_panel":
-            if not state.selected_case_id:
-                await callback.answer("Open a case first", show_alert=True)
-            else:
-                detail = await surface_service.case_detail(actor, state.selected_case_id)
-                if not detail:
-                    await callback.answer("Case not found", show_alert=True)
+            detail = await require_selected_case_detail(callback, actor, state, action_label="contact actions")
+            if detail:
+                if not _has_contact_actions(detail):
+                    await callback.answer("No direct-contact data for this case.", show_alert=True)
                 else:
                     state = navigation_service.open_panel(state, "case:contact")
                     card = detail.customer_card or CustomerCard(label=detail.customer_label)
@@ -278,14 +315,12 @@ def build_router(
                     note_preview_keyboard(),
                 )
         elif callback_data.action == "contact_back":
-            state.panel_key = "case:detail"
+            state = navigation_service.back(state)
             await render_selected_case(msg, actor, state)
         elif callback_data.action == "order_summary_open":
-            if not state.selected_case_id:
-                await callback.answer("Open a case first", show_alert=True)
-            else:
-                detail = await surface_service.case_detail(actor, state.selected_case_id)
-                if not detail or not has_order(detail):
+            detail = await require_selected_case_detail(callback, actor, state, action_label="order summary")
+            if detail:
+                if not has_order(detail):
                     await callback.answer("No linked order for this case.", show_alert=True)
                 else:
                     state = navigation_service.open_panel(state, "case:order")
@@ -296,32 +331,36 @@ def build_router(
                         order_actions_keyboard(has_pdf=has_order_pdf(detail), configured_targets=targets),
                     )
         elif callback_data.action == "order_send_summary_here":
-            if not state.selected_case_id:
-                await callback.answer("Open a case first", show_alert=True)
-            else:
-                detail = await surface_service.case_detail(actor, state.selected_case_id)
-                if not detail or not has_order(detail):
+            detail = await require_selected_case_detail(callback, actor, state, action_label="order summary")
+            if detail:
+                if not has_order(detail):
                     await callback.answer("No linked order for this case.", show_alert=True)
                 else:
-                    await msg.answer(build_order_compact_summary(detail))
+                    targets = _configured_handoff_targets(handoff_targets)
+                    await panel_manager.render(
+                        msg,
+                        "Compact order summary:\n\n" + build_order_compact_summary(detail) + "\n\n" + render_order_summary_panel(detail, configured_targets=targets),
+                        order_actions_keyboard(has_pdf=has_order_pdf(detail), configured_targets=targets),
+                    )
         elif callback_data.action == "order_send_pdf_here":
-            if not state.selected_case_id:
-                await callback.answer("Open a case first", show_alert=True)
-            else:
-                detail = await surface_service.case_detail(actor, state.selected_case_id)
-                if not detail or not has_order(detail):
+            detail = await require_selected_case_detail(callback, actor, state, action_label="order document")
+            if detail:
+                if not has_order(detail):
                     await callback.answer("No linked order for this case.", show_alert=True)
                 elif not detail.linked_order_pdf_url:
                     await callback.answer("Order PDF/document is not available.", show_alert=True)
                 else:
                     label = detail.linked_order_document_label or "Order PDF"
-                    await msg.answer(f"{label}: {detail.linked_order_pdf_url}")
+                    targets = _configured_handoff_targets(handoff_targets)
+                    await panel_manager.render(
+                        msg,
+                        f"Document reference:\n{label}: {detail.linked_order_pdf_url}\n\n" + render_order_summary_panel(detail, configured_targets=targets),
+                        order_actions_keyboard(has_pdf=has_order_pdf(detail), configured_targets=targets),
+                    )
         elif callback_data.action == "order_handoff":
-            if not state.selected_case_id:
-                await callback.answer("Open a case first", show_alert=True)
-            else:
-                detail = await surface_service.case_detail(actor, state.selected_case_id)
-                if not detail or not has_order(detail):
+            detail = await require_selected_case_detail(callback, actor, state, action_label="order handoff")
+            if detail:
+                if not has_order(detail):
                     await callback.answer("No linked order for this case.", show_alert=True)
                 else:
                     target_key = callback_data.value
@@ -331,23 +370,45 @@ def build_router(
                         await callback.answer(f"{label} target is not configured.", show_alert=True)
                     else:
                         text = build_order_compact_summary(detail, handoff_target_label=label)
-                        await msg.bot.send_message(chat_id=target_chat_id, text=text)
-                        await surface_service.save_internal_note(
-                            actor,
-                            state.selected_case_id,
-                            f"Order handoff sent to {label} (chat {target_chat_id}) for Order #{detail.linked_order_display_number}.",
-                        )
-                        await panel_manager.render(
-                            msg,
-                            f"Handoff sent to {label}.\n\n" + render_order_summary_panel(detail, configured_targets=_configured_handoff_targets(handoff_targets)),
-                            order_actions_keyboard(has_pdf=has_order_pdf(detail), configured_targets=_configured_handoff_targets(handoff_targets)),
-                        )
+                        try:
+                            await msg.bot.send_message(chat_id=target_chat_id, text=text)
+                        except Exception as exc:  # pragma: no cover - network/telegram errors
+                            logger.warning(
+                                "order_handoff_send_failed",
+                                case_id=str(detail.case_id),
+                                order_display_number=detail.linked_order_display_number,
+                                target=target_key,
+                                target_chat_id=target_chat_id,
+                                error=str(exc),
+                            )
+                            await panel_manager.render(
+                                msg,
+                                f"Handoff failed for {label}. Check target chat and bot access.\n\n"
+                                + render_order_summary_panel(detail, configured_targets=_configured_handoff_targets(handoff_targets)),
+                                order_actions_keyboard(
+                                    has_pdf=has_order_pdf(detail), configured_targets=_configured_handoff_targets(handoff_targets)
+                                ),
+                            )
+                        else:
+                            await surface_service.save_internal_note(
+                                actor,
+                                state.selected_case_id,
+                                f"Order handoff sent to {label} (chat {target_chat_id}) for Order #{detail.linked_order_display_number}.",
+                            )
+                            await panel_manager.render(
+                                msg,
+                                f"Handoff sent to {label}.\n\n" + render_order_summary_panel(detail, configured_targets=_configured_handoff_targets(handoff_targets)),
+                                order_actions_keyboard(has_pdf=has_order_pdf(detail), configured_targets=_configured_handoff_targets(handoff_targets)),
+                            )
         elif callback_data.action == "order_back":
-            state.panel_key = "case:detail"
+            state = navigation_service.back(state)
             await render_selected_case(msg, actor, state)
         elif callback_data.action == "reply_confirm":
             if state.compose_mode != "reply" or not state.compose_case_id or not state.compose_draft_text:
                 await callback.answer("No reply draft to send.", show_alert=True)
+            elif compose_service.is_stale(state):
+                compose_service.cancel(state)
+                await callback.answer("Reply draft is stale. Re-open case and compose again.", show_alert=True)
             else:
                 result_notice = await surface_service.send_reply(actor, state.compose_case_id, state.compose_draft_text)
                 compose_service.cancel(state)
@@ -370,6 +431,9 @@ def build_router(
         elif callback_data.action == "note_save_draft":
             if state.compose_mode != "note" or not state.compose_case_id or not state.compose_draft_text:
                 await callback.answer("No note draft to save.", show_alert=True)
+            elif compose_service.is_stale(state):
+                compose_service.cancel(state)
+                await callback.answer("Note draft is stale. Re-open case and create a new note.", show_alert=True)
             else:
                 await surface_service.save_internal_note(actor, state.compose_case_id, state.compose_draft_text)
                 compose_service.cancel(state)
@@ -439,7 +503,12 @@ def build_router(
             state = navigation_service.back(state)
             if state.panel_key.startswith("queue:") and state.queue_key:
                 items = await surface_service.queue_page(actor, state)
-                await panel_manager.render(msg, render_queue(state.queue_key, items, state.queue_offset, _filters_from_state(state)), queue_keyboard(items))
+                has_more = len(items) >= surface_service._page_size
+                await panel_manager.render(
+                    msg,
+                    render_queue(state.queue_key, items, state.queue_offset, _filters_from_state(state)),
+                    queue_keyboard(items, has_more=has_more),
+                )
             elif state.panel_key.startswith("search:") and state.search_query:
                 results = await surface_service.search_cases(actor, state.search_query, state)
                 await panel_manager.render(msg, render_search_results(state.search_query, results, _filters_from_state(state)), search_results_keyboard(results))
@@ -510,3 +579,16 @@ def _configured_handoff_targets(targets: HandoffTargets) -> dict[str, bool]:
         "warehouse": targets.warehouse_chat_id is not None,
         "accountant": targets.accountant_chat_id is not None,
     }
+
+
+def _has_contact_actions(detail: CaseDetail) -> bool:
+    card = detail.customer_card or CustomerCard(label=detail.customer_label)
+    return any(
+        value
+        for value in (
+            card.telegram_username,
+            card.telegram_chat_id,
+            card.telegram_user_id,
+            card.phone_number,
+        )
+    )

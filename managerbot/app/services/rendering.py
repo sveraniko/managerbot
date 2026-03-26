@@ -21,6 +21,8 @@ def render_hub(actor: ManagerActor, presence: PresenceStatus, counts: dict[str, 
         "",
         "Hot tasks",
     ]
+    if attention_load == 0:
+        lines.append("- No hot tasks now.")
     for bucket in buckets:
         lines.append(f"{bucket.title}: {len(bucket.items)}")
         if not bucket.items:
@@ -60,6 +62,7 @@ def render_queue(queue_key: str, items: list[QueueItem], offset: int, filters: Q
         )
     if not items:
         lines.append("No cases in this queue.")
+        lines.append("Try another lane or adjust filters.")
     return "\\n".join(lines)
 
 
@@ -97,9 +100,12 @@ def render_case_detail(
     head.append("")
     head.append("Direct contact policy: use direct channel for quick clarification; keep case truth via internal note/reply.")
     head.append("\nCustomer thread:")
-    for entry in detail.thread_entries[-5:]:
-        suffix = f" [{entry.delivery_status}]" if entry.direction == "outbound" else ""
-        head.append(f"- {entry.direction}: {_snippet(entry.body, 220)}{suffix}")
+    if detail.thread_entries:
+        for entry in detail.thread_entries[-5:]:
+            suffix = f" [{entry.delivery_status}]" if entry.direction == "outbound" else ""
+            head.append(f"- {entry.direction}: {_snippet(entry.body, 220)}{suffix}")
+    else:
+        head.append("- none")
     head.append("\nInternal notes:")
     if detail.internal_notes:
         for note in detail.internal_notes[-3:]:
@@ -154,6 +160,12 @@ def render_case_detail(
 
 
 def render_order_summary_panel(detail: CaseDetail, *, configured_targets: dict[str, bool]) -> str:
+    if not detail.linked_order_display_number:
+        return (
+            f"Order summary · Case #{detail.case_display_number}\n\n"
+            "No linked order for this case.\n"
+            "Return to case details."
+        )
     lines = [
         f"Order summary · Case #{detail.case_display_number}",
         "",
@@ -188,6 +200,8 @@ def render_contact_actions_panel(detail: CaseDetail) -> str:
     lines.append("Direct-contact cues:")
     lines.append("- Use direct contact for urgent clarification / voice discussion when faster than thread.")
     lines.append("- After direct contact, log summary via internal note to keep case operational record coherent.")
+    if not _has_contact_data(card):
+        lines.append("- Direct channel data is unavailable for this case.")
     return "\\n".join(lines)
 
 
@@ -286,3 +300,7 @@ def _identity_hint(label: str | None, actor_id: str | None, telegram_chat_id: in
     if telegram_chat_id is not None:
         return f"chat:{telegram_chat_id}"
     return "-"
+
+
+def _has_contact_data(card: CustomerCard) -> bool:
+    return any((card.telegram_username, card.telegram_chat_id, card.telegram_user_id, card.phone_number))
