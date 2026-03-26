@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.models import (
     CaseDetail,
+    CustomerCard,
     DeliverySnapshot,
     HotTaskBucket,
     HotTaskBucketKey,
@@ -353,6 +354,8 @@ class SqlQueueRepository:
                 priority=item["priority"],
                 escalation_level=int(item["escalation_level"]),
                 is_archived=item["operational_status"] in ("resolved", "closed"),
+                customer_actor_id=item.get("customer_actor_id"),
+                customer_telegram_chat_id=item.get("customer_telegram_chat_id"),
             )
             for _, item in matched[:limit]
         ]
@@ -532,12 +535,14 @@ class SqlCaseRepository:
                         """
                         select qc.id as case_id, qc.display_number as case_display_number, qc.status as commercial_status,
                                ops.status as operational_status, ops.waiting_state, ops.priority, ops.escalation_level, ops.sla_due_at,
-                               qc.customer_label as customer_label,
+                               qc.customer_label as customer_label, qc.customer_actor_id, qc.customer_telegram_chat_id,
+                               b.telegram_user_id as customer_telegram_user_id,
                                coalesce(am.display_name, 'Unassigned') as assignment_label,
                                o.display_number as linked_order_display_number
                         from core.quote_cases qc
                         join ops.quote_case_ops_states ops on ops.quote_case_id=qc.id
                         left join core.actors am on am.id=ops.assigned_manager_actor_id
+                        left join core.actor_telegram_bindings b on b.actor_id = qc.customer_actor_id
                         left join core.orders o on o.source_quote_case_id=qc.id
                         where qc.id=:case_id
                         """
@@ -590,7 +595,26 @@ class SqlCaseRepository:
                     {"case_id": case_id},
                 )
             ).first()
-        detail = CaseDetail(**head._mapping, linked_quote_display_number=head.case_display_number)
+        detail = CaseDetail(
+            case_id=head.case_id,
+            case_display_number=head.case_display_number,
+            commercial_status=head.commercial_status,
+            operational_status=head.operational_status,
+            waiting_state=head.waiting_state,
+            priority=head.priority,
+            escalation_level=head.escalation_level,
+            assignment_label=head.assignment_label,
+            sla_due_at=_as_dt(head.sla_due_at),
+            linked_order_display_number=head.linked_order_display_number,
+            linked_quote_display_number=head.case_display_number,
+            customer_label=head.customer_label,
+            customer_card=CustomerCard(
+                label=head.customer_label,
+                actor_id=str(head.customer_actor_id) if head.customer_actor_id is not None else None,
+                telegram_chat_id=int(head.customer_telegram_chat_id) if head.customer_telegram_chat_id is not None else None,
+                telegram_user_id=int(head.customer_telegram_user_id) if head.customer_telegram_user_id is not None else None,
+            ),
+        )
         detail.thread_entries = [ThreadEntry(**r._mapping) for r in reversed(thread_rows)]
         detail.internal_notes = [InternalNote(**r._mapping) for r in reversed(note_rows)]
         if delivery_row:

@@ -1,7 +1,7 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.bot.callbacks import MBCallback
-from app.models import HotTaskBucket, QueueFilters, QueueItem, SearchResultItem
+from app.models import CustomerCard, HotTaskBucket, QueueFilters, QueueItem, SearchResultItem
 
 
 def hub_keyboard(buckets: list[HotTaskBucket]) -> InlineKeyboardMarkup:
@@ -72,12 +72,38 @@ def case_keyboard(*, has_ai_recommendation: bool = False, ai_low_confidence: boo
             ],
             [InlineKeyboardButton(text="Reply to customer", callback_data=MBCallback(action="reply_start").pack())],
             [InlineKeyboardButton(text="Add internal note", callback_data=MBCallback(action="note_start").pack())],
+            [InlineKeyboardButton(text="Contact actions", callback_data=MBCallback(action="contact_panel").pack())],
             [InlineKeyboardButton(text="AI Analyze + Recommend / Refresh", callback_data=MBCallback(action="ai_analyze").pack())],
             *ai_rows,
             [InlineKeyboardButton(text="Refresh", callback_data=MBCallback(action="refresh", value="case").pack())],
             [InlineKeyboardButton(text="Back", callback_data=MBCallback(action="back").pack()), InlineKeyboardButton(text="Home", callback_data=MBCallback(action="home").pack())],
         ]
     )
+
+
+def contact_actions_keyboard(card: CustomerCard) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    direct_link = _telegram_direct_link(card)
+    if direct_link:
+        rows.append([InlineKeyboardButton(text="Open Telegram direct", url=direct_link)])
+    if card.telegram_username:
+        rows.append(
+            [InlineKeyboardButton(text="Show @username", callback_data=MBCallback(action="contact_copy", value="username").pack())]
+        )
+    if card.telegram_chat_id is not None:
+        rows.append(
+            [InlineKeyboardButton(text="Show chat ID", callback_data=MBCallback(action="contact_copy", value="chat_id").pack())]
+        )
+    if card.telegram_user_id is not None:
+        rows.append(
+            [InlineKeyboardButton(text="Show user ID", callback_data=MBCallback(action="contact_copy", value="user_id").pack())]
+        )
+    if card.phone_number:
+        rows.append([InlineKeyboardButton(text="Show phone", callback_data=MBCallback(action="contact_copy", value="phone").pack())])
+    rows.append([InlineKeyboardButton(text="Log contact outcome note", callback_data=MBCallback(action="log_contact_outcome").pack())])
+    rows.append([InlineKeyboardButton(text="Back to case", callback_data=MBCallback(action="contact_back").pack())])
+    rows.append([InlineKeyboardButton(text="Home", callback_data=MBCallback(action="home").pack())])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def compose_keyboard() -> InlineKeyboardMarkup:
@@ -154,3 +180,13 @@ def _bucket_short(title: str) -> str:
         "Failed delivery": "Failed",
     }
     return mapping.get(title, "Hot")
+
+
+def _telegram_direct_link(card: CustomerCard) -> str | None:
+    if card.telegram_username:
+        handle = card.telegram_username.lstrip("@")
+        return f"https://t.me/{handle}"
+    user_id = card.telegram_user_id if card.telegram_user_id is not None else card.telegram_chat_id
+    if user_id is not None and int(user_id) > 0:
+        return f"tg://user?id={int(user_id)}"
+    return None

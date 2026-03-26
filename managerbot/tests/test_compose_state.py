@@ -68,3 +68,15 @@ def test_ai_draft_adoption_is_case_bound_and_non_autonomous() -> None:
     rejected = service.start_reply_from_ai(state, other_case_id, "Wrong case draft")
     assert rejected is False
     assert state.compose_mode is None
+
+
+def test_contact_outcome_template_uses_existing_note_flow() -> None:
+    service = ComposeStateService()
+    case_id = uuid4()
+    state = ManagerSessionState(selected_case_id=case_id)
+
+    ok = service.start_note_template(state, case_id, "Direct contact outcome:\\n- Summary:")
+    assert ok is True
+    assert state.compose_mode == "note"
+    assert state.compose_case_id == case_id
+    assert "Direct contact outcome" in (state.compose_draft_text or "")

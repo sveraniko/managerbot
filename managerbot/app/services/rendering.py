@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from app.models import CaseDetail, HotTaskBucket, HotTaskItem, ManagerActor, PresenceStatus, QueueFilters, QueueItem, SearchResultItem
+from app.models import CaseDetail, CustomerCard, HotTaskBucket, HotTaskItem, ManagerActor, PresenceStatus, QueueFilters, QueueItem, SearchResultItem
 from app.services.ai_reader import AIReaderAnalysis
 from app.services.ai_recommender import AIRecommendation
 from app.services.ai_state import AISnapshotMeta
@@ -92,6 +92,9 @@ def render_case_detail(
         if detail.last_delivery.error_message:
             delivery_line += f" ({detail.last_delivery.error_message})"
         head.append(delivery_line)
+    head.extend(_render_customer_card(detail.customer_card or CustomerCard(label=detail.customer_label)))
+    head.append("")
+    head.append("Direct contact policy: use direct channel for quick clarification; keep case truth via internal note/reply.")
     head.append("\nCustomer thread:")
     for entry in detail.thread_entries[-5:]:
         suffix = f" [{entry.delivery_status}]" if entry.direction == "outbound" else ""
@@ -149,6 +152,17 @@ def render_case_detail(
     return "\\n".join(head)
 
 
+def render_contact_actions_panel(detail: CaseDetail) -> str:
+    card = detail.customer_card or CustomerCard(label=detail.customer_label)
+    lines = [f"Contact actions · Case #{detail.case_display_number}", ""]
+    lines.extend(_render_customer_card(card))
+    lines.append("")
+    lines.append("Direct-contact cues:")
+    lines.append("- Use direct contact for urgent clarification / voice discussion when faster than thread.")
+    lines.append("- After direct contact, log summary via internal note to keep case operational record coherent.")
+    return "\\n".join(lines)
+
+
 def _snippet(text: str, limit: int = 140) -> str:
     if len(text) <= limit:
         return text
@@ -187,8 +201,9 @@ def render_search_results(query: str, results: list[SearchResultItem], filters: 
     for item in results:
         archive_mark = " [ARCHIVE]" if item.is_archived else ""
         order_hint = f" O#{item.linked_order_display_number}" if item.linked_order_display_number else ""
+        identity_hint = _identity_hint(item.customer_label, item.customer_actor_id, item.customer_telegram_chat_id)
         lines.append(
-            f"#{item.case_display_number}{archive_mark}{order_hint} | {item.customer_label or '-'} | {item.operational_status}/{item.waiting_state} | p:{item.priority} e:{item.escalation_level}"
+            f"#{item.case_display_number}{archive_mark}{order_hint} | {identity_hint} | {item.operational_status}/{item.waiting_state} | p:{item.priority} e:{item.escalation_level}"
         )
     return "\\n".join(lines)
 
@@ -208,3 +223,24 @@ def _age_hint(ts: datetime) -> str:
         return f"{mins}m ago"
     mins = max(1, abs(delta) // 60)
     return f"in {mins}m"
+
+
+def _render_customer_card(card: CustomerCard) -> list[str]:
+    lines = ["Customer card:"]
+    lines.append(f"- Label: {card.label or 'Unavailable'}")
+    lines.append(f"- Actor ID: {card.actor_id or 'Unavailable'}")
+    lines.append(f"- Telegram username: {card.telegram_username or 'Unavailable'}")
+    lines.append(f"- Telegram chat ID: {card.telegram_chat_id if card.telegram_chat_id is not None else 'Unavailable'}")
+    lines.append(f"- Telegram user ID: {card.telegram_user_id if card.telegram_user_id is not None else 'Unavailable'}")
+    lines.append(f"- Phone: {card.phone_number or 'Unavailable'}")
+    return lines
+
+
+def _identity_hint(label: str | None, actor_id: str | None, telegram_chat_id: int | None) -> str:
+    if label:
+        return label
+    if actor_id:
+        return f"actor:{actor_id}"
+    if telegram_chat_id is not None:
+        return f"chat:{telegram_chat_id}"
+    return "-"
