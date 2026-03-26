@@ -22,6 +22,7 @@ from app.models import (
     SystemRole,
     ThreadEntry,
 )
+from app.services.priority import is_high_or_higher_priority, is_top_tier_priority, priority_rank
 
 
 class SqlActorRepository:
@@ -117,7 +118,7 @@ class SqlQueueRepository:
                     result["waiting_me"] += 1
             if row.status == "active" and row.waiting_state == "waiting_customer":
                 result["waiting_customer"] += 1
-            if row.priority in ("urgent", "vip") and row.status not in ("resolved", "closed"):
+            if is_top_tier_priority(row.priority) and row.status not in ("resolved", "closed"):
                 result["urgent"] += 1
             if row.escalation_level > 0 and row.status not in ("resolved", "closed"):
                 result["escalated"] += 1
@@ -183,7 +184,7 @@ class SqlQueueRepository:
             filtered = [i for i in entries if i["operational_status"] in ("resolved", "closed")]
             filtered.sort(
                 key=lambda i: (
-                    {"urgent": 0, "vip": 0, "high": 1}.get(i["priority"], 2),
+                    priority_rank(i["priority"]),
                     -int(i["escalation_level"]),
                     -(i["ops_updated_at"] or epoch).timestamp(),
                     int(i["case_display_number"]),
@@ -191,31 +192,31 @@ class SqlQueueRepository:
             )
         elif queue_key == "new":
             filtered = [i for i in entries if i["operational_status"] == "new"]
-            filtered.sort(key=lambda i: ({"urgent": 0, "vip": 0, "high": 1}.get(i["priority"], 2), -int(i["escalation_level"]), -(i["ops_updated_at"] or epoch).timestamp(), int(i["case_display_number"])))
+            filtered.sort(key=lambda i: (priority_rank(i["priority"]), -int(i["escalation_level"]), -(i["ops_updated_at"] or epoch).timestamp(), int(i["case_display_number"])))
         elif queue_key == "mine":
             filtered = [i for i in entries if i["assigned_manager_actor_id"] == actor_id]
-            filtered.sort(key=lambda i: ({"urgent": 0, "vip": 0, "high": 1}.get(i["priority"], 2), sla_due_rank(i["sla_due_at"]), -int(i["escalation_level"]), (i["sla_due_at"] or i["last_customer_message_at"] or epoch).timestamp(), int(i["case_display_number"])))
+            filtered.sort(key=lambda i: (priority_rank(i["priority"]), sla_due_rank(i["sla_due_at"]), -int(i["escalation_level"]), (i["sla_due_at"] or i["last_customer_message_at"] or epoch).timestamp(), int(i["case_display_number"])))
         elif queue_key == "waiting_me":
             filtered = [i for i in entries if i["assigned_manager_actor_id"] == actor_id and i["waiting_state"] in ("none", "waiting_manager", "waiting_owner")]
-            filtered.sort(key=lambda i: ({"urgent": 0, "vip": 0, "high": 1}.get(i["priority"], 2), sla_due_rank(i["sla_due_at"]), -int(i["escalation_level"]), (i["sla_due_at"] or i["last_customer_message_at"] or epoch).timestamp(), int(i["case_display_number"])))
+            filtered.sort(key=lambda i: (priority_rank(i["priority"]), sla_due_rank(i["sla_due_at"]), -int(i["escalation_level"]), (i["sla_due_at"] or i["last_customer_message_at"] or epoch).timestamp(), int(i["case_display_number"])))
         elif queue_key == "waiting_customer":
             filtered = [i for i in entries if i["operational_status"] == "active" and i["waiting_state"] == "waiting_customer"]
-            filtered.sort(key=lambda i: ({"urgent": 0, "vip": 0, "high": 1}.get(i["priority"], 2), -int(i["escalation_level"]), -(i["last_customer_message_at"] or epoch).timestamp(), int(i["case_display_number"])))
+            filtered.sort(key=lambda i: (priority_rank(i["priority"]), -int(i["escalation_level"]), -(i["last_customer_message_at"] or epoch).timestamp(), int(i["case_display_number"])))
         elif queue_key == "urgent":
-            filtered = [i for i in entries if i["priority"] in ("urgent", "vip")]
+            filtered = [i for i in entries if is_top_tier_priority(i["priority"])]
             filtered.sort(key=lambda i: (-int(i["escalation_level"]), sla_due_rank(i["sla_due_at"]), -(i["last_customer_message_at"] or epoch).timestamp(), int(i["case_display_number"])))
         elif queue_key == "escalated":
             filtered = [i for i in entries if int(i["escalation_level"]) > 0]
-            filtered.sort(key=lambda i: ({"urgent": 0, "vip": 0, "high": 1}.get(i["priority"], 2), sla_due_rank(i["sla_due_at"]), -(i["last_customer_message_at"] or epoch).timestamp(), int(i["case_display_number"])))
+            filtered.sort(key=lambda i: (priority_rank(i["priority"]), sla_due_rank(i["sla_due_at"]), -(i["last_customer_message_at"] or epoch).timestamp(), int(i["case_display_number"])))
         elif queue_key == "sla_risk":
             filtered = [i for i in entries if sla_due_rank(i["sla_due_at"]) in (0, 1)]
-            filtered.sort(key=lambda i: (sla_due_rank(i["sla_due_at"]), {"urgent": 0, "vip": 0, "high": 1}.get(i["priority"], 2), -int(i["escalation_level"]), (i["sla_due_at"] or epoch).timestamp(), int(i["case_display_number"])))
+            filtered.sort(key=lambda i: (sla_due_rank(i["sla_due_at"]), priority_rank(i["priority"]), -int(i["escalation_level"]), (i["sla_due_at"] or epoch).timestamp(), int(i["case_display_number"])))
         elif queue_key == "urgent_escalated":
-            filtered = [i for i in entries if i["priority"] in ("urgent", "vip", "high") or int(i["escalation_level"]) > 0]
-            filtered.sort(key=lambda i: ({"urgent": 0, "vip": 0, "high": 1}.get(i["priority"], 2), -int(i["escalation_level"]), sla_due_rank(i["sla_due_at"]), -(i["last_customer_message_at"] or epoch).timestamp(), int(i["case_display_number"])))
+            filtered = [i for i in entries if is_high_or_higher_priority(i["priority"]) or int(i["escalation_level"]) > 0]
+            filtered.sort(key=lambda i: (priority_rank(i["priority"]), -int(i["escalation_level"]), sla_due_rank(i["sla_due_at"]), -(i["last_customer_message_at"] or epoch).timestamp(), int(i["case_display_number"])))
         elif queue_key == "failed_delivery":
             filtered = [i for i in entries if i["last_failed_delivery_at"] is not None]
-            filtered.sort(key=lambda i: (-(i["last_failed_delivery_at"] or epoch).timestamp(), {"urgent": 0, "vip": 0, "high": 1}.get(i["priority"], 2), -int(i["escalation_level"]), int(i["case_display_number"])))
+            filtered.sort(key=lambda i: (-(i["last_failed_delivery_at"] or epoch).timestamp(), priority_rank(i["priority"]), -int(i["escalation_level"]), int(i["case_display_number"])))
         else:
             filtered = []
 
@@ -262,9 +263,9 @@ class SqlQueueRepository:
         elif filters.waiting_scope == "waiting_customer":
             filtered = [i for i in filtered if i["waiting_state"] == "waiting_customer"]
         if filters.priority_scope == "high_or_urgent":
-            filtered = [i for i in filtered if i["priority"] in ("high", "urgent", "vip")]
+            filtered = [i for i in filtered if is_high_or_higher_priority(i["priority"])]
         elif filters.priority_scope == "urgent_or_vip":
-            filtered = [i for i in filtered if i["priority"] in ("urgent", "vip")]
+            filtered = [i for i in filtered if is_top_tier_priority(i["priority"])]
         elif filters.priority_scope == "vip":
             filtered = [i for i in filtered if i["priority"] == "vip"]
         if filters.sla_scope == "at_risk":
@@ -308,9 +309,6 @@ class SqlQueueRepository:
         for item in raw_items:
             item["sla_due_at"] = _as_dt(item.get("sla_due_at"))
         raw_items = self._apply_filters(raw_items, actor_id, filters)
-
-        def priority_rank(priority: str) -> int:
-            return {"urgent": 0, "vip": 0, "high": 1}.get(priority, 2)
 
         def match_rank(item: dict) -> int | None:
             case_num = str(item["case_display_number"])
@@ -405,9 +403,6 @@ class SqlQueueRepository:
             item["last_failed_delivery_at"] = _as_dt(item.get("last_failed_delivery_at"))
             raw.append(item)
 
-        def priority_rank(v: str) -> int:
-            return {"urgent": 0, "high": 1}.get(v, 2)
-
         def sla_rank(sla_due_at: datetime | None) -> int:
             if not sla_due_at:
                 return 2
@@ -483,7 +478,7 @@ class SqlQueueRepository:
         ]
 
         # Urgent/VIP/escalated: explicit priority then escalation pressure.
-        urgent_raw = [i for i in raw if i["priority"] in ("urgent", "high") or int(i["escalation_level"]) > 0]
+        urgent_raw = [i for i in raw if is_high_or_higher_priority(i["priority"]) or int(i["escalation_level"]) > 0]
         urgent_raw.sort(
             key=lambda i: (
                 priority_rank(i["priority"]),
@@ -657,7 +652,7 @@ class SqlCaseRepository:
                     """
                     update ops.quote_case_ops_states
                     set escalation_level = 1,
-                        priority = case when priority='urgent' then 'urgent' else 'high' end,
+                        priority = case when priority in ('urgent', 'vip') then priority else 'high' end,
                         assigned_manager_actor_id = :owner_actor_id,
                         assigned_by_actor_id = :actor_id,
                         assigned_at = CURRENT_TIMESTAMP,

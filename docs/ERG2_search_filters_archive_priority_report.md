@@ -49,8 +49,8 @@ A dedicated filter panel cycles each dimension and supports one-tap reset.
 - Priority is visible in case detail, queue rows, hot-task cues, and search result cues.
 
 ## Ordering integration
-- Priority ordering now treats `vip` with urgent-level prominence.
-- Queue/search sorting remains deterministic with explicit tuple ordering.
+- Priority ordering was introduced for `vip`, but ERG2a later hardened several inconsistent paths (notably urgent/escalated lane membership and helper drift in some ranking branches).
+- Queue/search sorting remains deterministic with explicit tuple ordering; see ERG2a report for final canonical VIP semantics.
 
 ## State/navigation discipline
 - Added minimal session fields for search mode/query and filter values.

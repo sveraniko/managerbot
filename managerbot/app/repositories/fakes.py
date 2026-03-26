@@ -5,6 +5,7 @@ from uuid import UUID
 from uuid import uuid4
 
 from app.models import CaseDetail, HotTaskBucket, HotTaskBucketKey, HotTaskItem, ManagerActor, NotificationEvent, PresenceStatus, QueueFilters, QueueItem, SearchResultItem, ThreadEntry
+from app.services.priority import is_high_or_higher_priority, is_top_tier_priority, priority_rank
 
 
 class FakeActorRepository:
@@ -98,7 +99,16 @@ class FakeQueueRepository:
                     )
                 )
         deduped: dict[UUID, SearchResultItem] = {m.case_id: m for m in matches}
-        return sorted(deduped.values(), key=lambda i: (i.case_display_number, i.case_id.hex))[:limit]
+        return sorted(
+            deduped.values(),
+            key=lambda i: (
+                0 if not i.is_archived else 1,
+                priority_rank(i.priority),
+                -int(i.escalation_level),
+                i.case_display_number,
+                i.case_id.hex,
+            ),
+        )[:limit]
 
 
 class FakeCaseRepository:
@@ -123,7 +133,8 @@ class FakeCaseRepository:
         if not detail:
             return False
         detail.escalation_level = 1
-        detail.priority = "high"
+        if detail.priority not in ("urgent", "vip"):
+            detail.priority = "high"
         detail.waiting_state = "waiting_owner"
         detail.assignment_label = "Owner"
         return True
@@ -182,9 +193,9 @@ def _apply_filters(items: list[QueueItem], actor_id: UUID, filters: QueueFilters
     elif filters.waiting_scope == "waiting_customer":
         filtered = [i for i in filtered if i.waiting_state == "waiting_customer"]
     if filters.priority_scope == "high_or_urgent":
-        filtered = [i for i in filtered if i.priority in ("high", "urgent", "vip")]
+        filtered = [i for i in filtered if is_high_or_higher_priority(i.priority)]
     elif filters.priority_scope == "urgent_or_vip":
-        filtered = [i for i in filtered if i.priority in ("urgent", "vip")]
+        filtered = [i for i in filtered if is_top_tier_priority(i.priority)]
     elif filters.priority_scope == "vip":
         filtered = [i for i in filtered if i.priority == "vip"]
     if filters.escalation_scope == "escalated":
