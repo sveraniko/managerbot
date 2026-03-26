@@ -1,5 +1,6 @@
 from app.models import CaseDetail, ManagerActor, PresenceStatus, QueueItem
 from app.services.ai_reader import AIReaderAnalysis
+from app.services.ai_recommender import AIRecommendation
 from app.services.sla import SlaService
 
 
@@ -38,6 +39,8 @@ def render_case_detail(
     *,
     ai_analysis: AIReaderAnalysis | None = None,
     ai_error: str | None = None,
+    ai_recommendation: AIRecommendation | None = None,
+    ai_recommendation_error: str | None = None,
 ) -> str:
     sla_state = SlaService().classify(detail.sla_due_at)
     head = [
@@ -87,4 +90,30 @@ def render_case_detail(
         head.append(f"- Confidence: {ai_analysis.confidence:.2f}")
     else:
         head.append("- No AI analysis yet. Tap AI Analyze.")
+    head.append("\nAI recommendations (advisory only — no auto-actions):")
+    if ai_recommendation_error:
+        head.append(f"- unavailable: {ai_recommendation_error}")
+    elif ai_recommendation:
+        head.append(f"- Recommended action: {ai_recommendation.recommended_action.value}")
+        head.append(f"- Next step: {ai_recommendation.recommended_next_step}")
+        head.append(f"- Reply draft: {_snippet(ai_recommendation.draft_reply)}")
+        head.append(f"- Internal note draft: {_snippet(ai_recommendation.draft_internal_note)}")
+        if ai_recommendation.clarification_questions:
+            head.append(f"- Clarifications: {'; '.join(ai_recommendation.clarification_questions)}")
+        else:
+            head.append("- Clarifications: none")
+        if ai_recommendation.escalation_recommendation:
+            rationale = ai_recommendation.escalation_reason or "No rationale provided."
+            head.append(f"- Escalation suggested: yes ({rationale})")
+        else:
+            head.append("- Escalation suggested: no")
+        head.append(f"- Confidence: {ai_recommendation.confidence:.2f}")
+    else:
+        head.append("- No recommendation yet. Tap AI Analyze + Recommend.")
     return "\\n".join(head)
+
+
+def _snippet(text: str, limit: int = 140) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "…"

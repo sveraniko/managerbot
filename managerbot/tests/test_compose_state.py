@@ -45,3 +45,26 @@ def test_back_to_case_clears_compose_context() -> None:
     assert state.compose_mode is None
     assert state.compose_case_id is None
     assert state.compose_draft_text is None
+
+
+def test_ai_draft_adoption_is_case_bound_and_non_autonomous() -> None:
+    service = ComposeStateService()
+    case_id = uuid4()
+    other_case_id = uuid4()
+    state = ManagerSessionState(selected_case_id=case_id)
+
+    ok_reply = service.start_reply_from_ai(state, case_id, "Draft reply text")
+    assert ok_reply is True
+    assert state.compose_mode == "reply"
+    assert state.compose_draft_text == "Draft reply text"
+
+    service.cancel(state)
+    ok_note = service.start_note_from_ai(state, case_id, "Draft note text")
+    assert ok_note is True
+    assert state.compose_mode == "note"
+    assert state.compose_draft_text == "Draft note text"
+
+    service.cancel(state)
+    rejected = service.start_reply_from_ai(state, other_case_id, "Wrong case draft")
+    assert rejected is False
+    assert state.compose_mode is None

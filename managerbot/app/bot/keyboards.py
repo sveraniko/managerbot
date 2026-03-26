@@ -26,14 +26,23 @@ def queue_keyboard(items: list[QueueItem]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def case_keyboard() -> InlineKeyboardMarkup:
+def case_keyboard(*, has_ai_recommendation: bool = False) -> InlineKeyboardMarkup:
+    ai_rows = []
+    if has_ai_recommendation:
+        ai_rows.extend(
+            [
+                [InlineKeyboardButton(text="Use AI reply draft", callback_data=MBCallback(action="ai_use_reply_draft").pack())],
+                [InlineKeyboardButton(text="Use AI note draft", callback_data=MBCallback(action="ai_use_note_draft").pack())],
+            ]
+        )
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="Claim / Take into work", callback_data=MBCallback(action="claim").pack())],
             [InlineKeyboardButton(text="Escalate to owner", callback_data=MBCallback(action="escalate_owner").pack())],
             [InlineKeyboardButton(text="Reply to customer", callback_data=MBCallback(action="reply_start").pack())],
             [InlineKeyboardButton(text="Add internal note", callback_data=MBCallback(action="note_start").pack())],
-            [InlineKeyboardButton(text="AI Analyze / Refresh", callback_data=MBCallback(action="ai_analyze").pack())],
+            [InlineKeyboardButton(text="AI Analyze + Recommend / Refresh", callback_data=MBCallback(action="ai_analyze").pack())],
+            *ai_rows,
             [InlineKeyboardButton(text="Refresh", callback_data=MBCallback(action="refresh", value="case").pack())],
             [InlineKeyboardButton(text="Back", callback_data=MBCallback(action="back").pack()), InlineKeyboardButton(text="Home", callback_data=MBCallback(action="home").pack())],
         ]
@@ -45,6 +54,16 @@ def compose_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="Cancel", callback_data=MBCallback(action="compose_cancel").pack())],
             [InlineKeyboardButton(text="Back to case", callback_data=MBCallback(action="compose_back_case").pack())],
+        ]
+    )
+
+
+def note_preview_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Save note draft", callback_data=MBCallback(action="note_save_draft").pack())],
+            [InlineKeyboardButton(text="Edit", callback_data=MBCallback(action="note_edit").pack())],
+            [InlineKeyboardButton(text="Cancel", callback_data=MBCallback(action="compose_cancel").pack())],
         ]
     )
 

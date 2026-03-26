@@ -18,6 +18,20 @@ class ComposeStateService:
         state.compose_draft_text = None
         return state
 
+    def start_reply_from_ai(self, state: ManagerSessionState, case_id: UUID, draft_text: str) -> bool:
+        if state.selected_case_id != case_id or not draft_text.strip():
+            return False
+        self.start_reply(state, case_id)
+        state.compose_draft_text = draft_text.strip()
+        return True
+
+    def start_note_from_ai(self, state: ManagerSessionState, case_id: UUID, draft_text: str) -> bool:
+        if state.selected_case_id != case_id or not draft_text.strip():
+            return False
+        self.start_note(state, case_id)
+        state.compose_draft_text = draft_text.strip()
+        return True
+
     def cancel(self, state: ManagerSessionState) -> ManagerSessionState:
         state.compose_mode = None
         state.compose_case_id = None

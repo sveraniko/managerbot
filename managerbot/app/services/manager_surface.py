@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.models import CaseDetail, ManagerActor, PresenceStatus, QueueItem
 from app.repositories.contracts import CaseRepository, PresenceRepository, QueueRepository
 from app.services.ai_reader import AIReaderResult, AIReaderService
+from app.services.ai_recommender import AIRecommendationResult, AIRecommenderService
 from app.services.delivery import CustomerDeliveryGateway
 from app.services.sla import SlaService
 from app.state.manager_session import ManagerSessionState
@@ -16,6 +17,7 @@ class ManagerSurfaceService:
         presence_repo: PresenceRepository,
         delivery_gateway: CustomerDeliveryGateway,
         ai_reader: AIReaderService | None = None,
+        ai_recommender: AIRecommenderService | None = None,
         page_size: int = 5,
         sla_service: SlaService | None = None,
     ) -> None:
@@ -24,6 +26,7 @@ class ManagerSurfaceService:
         self._presence_repo = presence_repo
         self._delivery_gateway = delivery_gateway
         self._ai_reader = ai_reader
+        self._ai_recommender = ai_recommender
         self._page_size = page_size
         self._sla_service = sla_service or SlaService()
 
@@ -86,3 +89,9 @@ class ManagerSurfaceService:
         if not self._ai_reader:
             return AIReaderResult(ok=False, error_message="AI reader is disabled.")
         return await self._ai_reader.analyze_case(detail, sla_state=self.case_sla_state(detail))
+
+    async def recommend_case(self, detail: CaseDetail) -> AIRecommendationResult:
+        if not self._ai_reader or not self._ai_recommender:
+            return AIRecommendationResult(ok=False, error_message="AI recommender is disabled.")
+        packet = self._ai_reader.build_packet(detail, sla_state=self.case_sla_state(detail))
+        return await self._ai_recommender.recommend(packet)
