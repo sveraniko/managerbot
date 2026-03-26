@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Protocol
 from uuid import UUID
 
-from app.models import CaseDetail, ManagerActor, PresenceStatus, QueueItem
+from app.models import CaseDetail, HotTaskBucket, ManagerActor, PresenceStatus, QueueItem
 
 
 class ActorRepository(Protocol):
@@ -20,6 +20,8 @@ class QueueRepository(Protocol):
     async def summary_counts(self, actor_id: UUID) -> dict[str, int]: ...
 
     async def list_queue(self, queue_key: str, actor_id: UUID, offset: int, limit: int) -> list[QueueItem]: ...
+
+    async def hot_task_buckets(self, actor_id: UUID, item_limit: int) -> list[HotTaskBucket]: ...
 
 
 class CaseRepository(Protocol):

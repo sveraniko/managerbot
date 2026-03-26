@@ -6,7 +6,20 @@ from uuid import uuid4
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.models import CaseDetail, DeliverySnapshot, InternalNote, ManagerActor, NotificationEvent, PresenceStatus, QueueItem, SystemRole, ThreadEntry
+from app.models import (
+    CaseDetail,
+    DeliverySnapshot,
+    HotTaskBucket,
+    HotTaskBucketKey,
+    HotTaskItem,
+    InternalNote,
+    ManagerActor,
+    NotificationEvent,
+    PresenceStatus,
+    QueueItem,
+    SystemRole,
+    ThreadEntry,
+)
 
 
 class SqlActorRepository:
@@ -172,6 +185,171 @@ class SqlQueueRepository:
             )
         )
         return items[offset : offset + limit]
+
+    async def hot_task_buckets(self, actor_id, item_limit: int) -> list[HotTaskBucket]:
+        # V1 workdesk buckets are operational and deterministic by contract:
+        # needs reply, new business, SLA risk, urgent/escalated, and failed delivery.
+        async with self._sf() as session:
+            rows = (
+                await session.execute(
+                    text(
+                        """
+                        select
+                            qc.id as case_id,
+                            qc.display_number as case_display_number,
+                            qc.customer_label as customer_label,
+                            s.status as operational_status,
+                            s.waiting_state,
+                            s.priority,
+                            s.escalation_level,
+                            s.assigned_manager_actor_id,
+                            s.last_customer_message_at,
+                            s.sla_due_at,
+                            s.updated_at as ops_updated_at,
+                            o.display_number as linked_order_display_number,
+                            (
+                                select max(a.attempted_at)
+                                from ops.reply_delivery_attempts a
+                                where a.quote_case_id = s.quote_case_id and a.status = 'failed'
+                            ) as last_failed_delivery_at
+                        from ops.quote_case_ops_states s
+                        join core.quote_cases qc on qc.id = s.quote_case_id
+                        left join core.orders o on o.source_quote_case_id = qc.id
+                        where s.status in ('new', 'active')
+                        """
+                    )
+                )
+            ).all()
+
+        now_ts = datetime.now(timezone.utc).timestamp()
+        epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        raw: list[dict] = []
+        for row in rows:
+            item = dict(row._mapping)
+            item["sla_due_at"] = _as_dt(item.get("sla_due_at"))
+            item["last_customer_message_at"] = _as_dt(item.get("last_customer_message_at"))
+            item["ops_updated_at"] = _as_dt(item.get("ops_updated_at"))
+            item["last_failed_delivery_at"] = _as_dt(item.get("last_failed_delivery_at"))
+            raw.append(item)
+
+        def priority_rank(v: str) -> int:
+            return {"urgent": 0, "high": 1}.get(v, 2)
+
+        def sla_rank(sla_due_at: datetime | None) -> int:
+            if not sla_due_at:
+                return 2
+            due_ts = sla_due_at.timestamp()
+            if due_ts <= now_ts:
+                return 0
+            if due_ts <= now_ts + 1800:
+                return 1
+            return 2
+
+        def to_item(item: dict, reason: str, *, last_event_at: datetime | None) -> HotTaskItem:
+            return HotTaskItem(
+                case_id=item["case_id"],
+                case_display_number=int(item["case_display_number"]),
+                customer_label=item.get("customer_label"),
+                reason=reason,
+                priority=item["priority"],
+                escalation_level=int(item["escalation_level"]),
+                waiting_state=item["waiting_state"],
+                sla_due_at=item.get("sla_due_at"),
+                last_customer_message_at=item.get("last_customer_message_at"),
+                last_event_at=last_event_at,
+                linked_order_display_number=item.get("linked_order_display_number"),
+            )
+
+        # Needs reply now: manager-side waiting with customer activity.
+        needs_reply_raw = [
+            i
+            for i in raw
+            if i["assigned_manager_actor_id"] == actor_id and i["waiting_state"] in ("none", "waiting_manager", "waiting_owner")
+        ]
+        needs_reply_raw.sort(
+            key=lambda i: (
+                priority_rank(i["priority"]),
+                sla_rank(i["sla_due_at"]),
+                -int(i["escalation_level"]),
+                -(i["last_customer_message_at"] or epoch).timestamp(),
+                i["case_display_number"],
+            )
+        )
+        needs_reply = [to_item(i, "Customer waiting for manager response.", last_event_at=i["last_customer_message_at"]) for i in needs_reply_raw[:item_limit]]
+
+        # New business: new/unassigned surfaced opportunities.
+        new_business_raw = [i for i in raw if i["operational_status"] == "new"]
+        new_business_raw.sort(
+            key=lambda i: (
+                priority_rank(i["priority"]),
+                -int(i["escalation_level"]),
+                -(i["ops_updated_at"] or epoch).timestamp(),
+                i["case_display_number"],
+            )
+        )
+        new_business = [to_item(i, "Newly visible case needs triage.", last_event_at=i["ops_updated_at"]) for i in new_business_raw[:item_limit]]
+
+        # SLA risk: overdue before near-breach.
+        sla_risk_raw = [i for i in raw if sla_rank(i["sla_due_at"]) in (0, 1)]
+        sla_risk_raw.sort(
+            key=lambda i: (
+                sla_rank(i["sla_due_at"]),
+                priority_rank(i["priority"]),
+                -int(i["escalation_level"]),
+                (i["sla_due_at"] or epoch).timestamp(),
+                i["case_display_number"],
+            )
+        )
+        sla_risk = [
+            to_item(
+                i,
+                "SLA overdue." if sla_rank(i["sla_due_at"]) == 0 else "SLA near breach.",
+                last_event_at=i["sla_due_at"],
+            )
+            for i in sla_risk_raw[:item_limit]
+        ]
+
+        # Urgent/VIP/escalated: explicit priority then escalation pressure.
+        urgent_raw = [i for i in raw if i["priority"] in ("urgent", "high") or int(i["escalation_level"]) > 0]
+        urgent_raw.sort(
+            key=lambda i: (
+                priority_rank(i["priority"]),
+                -int(i["escalation_level"]),
+                sla_rank(i["sla_due_at"]),
+                -(i["last_customer_message_at"] or epoch).timestamp(),
+                i["case_display_number"],
+            )
+        )
+        urgent = [to_item(i, "Urgent/VIP/escalated handling lane.", last_event_at=i["last_customer_message_at"] or i["ops_updated_at"]) for i in urgent_raw[:item_limit]]
+
+        # Failed delivery: most recent failures first.
+        failed_raw = [i for i in raw if i["last_failed_delivery_at"]]
+        failed_raw.sort(
+            key=lambda i: (
+                -(i["last_failed_delivery_at"] or epoch).timestamp(),
+                priority_rank(i["priority"]),
+                -int(i["escalation_level"]),
+                i["case_display_number"],
+            )
+        )
+        failed = [
+            to_item(i, "Outbound delivery failed; manual recovery required.", last_event_at=i["last_failed_delivery_at"])
+            for i in failed_raw[:item_limit]
+        ]
+
+        return [
+            HotTaskBucket(HotTaskBucketKey.NEEDS_REPLY_NOW, "Needs reply now", "waiting_me", needs_reply),
+            HotTaskBucket(HotTaskBucketKey.NEW_BUSINESS, "New business", "new", new_business),
+            HotTaskBucket(HotTaskBucketKey.SLA_AT_RISK, "SLA at risk", "waiting_me", sla_risk),
+            HotTaskBucket(HotTaskBucketKey.URGENT_ESCALATED, "Urgent / VIP / escalated", "urgent", urgent),
+            HotTaskBucket(HotTaskBucketKey.FAILED_DELIVERY, "Failed delivery", "waiting_me", failed),
+        ]
+
+
+def _as_dt(value):
+    if value is None or isinstance(value, datetime):
+        return value
+    return datetime.fromisoformat(str(value))
 
 
 class SqlCaseRepository:

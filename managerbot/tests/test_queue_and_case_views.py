@@ -2,11 +2,21 @@ import asyncio
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from app.models import CaseDetail, ManagerActor, QueueItem, SystemRole, ThreadEntry
+from app.models import (
+    CaseDetail,
+    HotTaskBucket,
+    HotTaskBucketKey,
+    HotTaskItem,
+    ManagerActor,
+    PresenceStatus,
+    QueueItem,
+    SystemRole,
+    ThreadEntry,
+)
 from app.repositories.fakes import FakeCaseRepository, FakePresenceRepository, FakeQueueRepository
 from app.services.delivery import DeliveryResult
 from app.services.manager_surface import ManagerSurfaceService
-from app.services.rendering import render_case_detail, render_queue
+from app.services.rendering import render_case_detail, render_hub, render_queue
 from app.state.manager_session import ManagerSessionState
 
 
@@ -115,3 +125,45 @@ def test_reply_send_updates_delivery_status_and_note_is_internal_only() -> None:
     assert "Internal follow-up only" in rendered
     assert "We are checking this now." in rendered
     assert "[failed]" in rendered
+
+
+def test_workdesk_rendering_shows_hot_tasks_and_queue_summary() -> None:
+    actor = ManagerActor(uuid4(), 1, "Manager", SystemRole.MANAGER)
+    hot = HotTaskBucket(
+        key=HotTaskBucketKey.NEEDS_REPLY_NOW,
+        title="Needs reply now",
+        queue_key="waiting_me",
+        items=[
+            HotTaskItem(
+                case_id=uuid4(),
+                case_display_number=300,
+                customer_label="Acme",
+                reason="Customer waiting for manager response.",
+                priority="urgent",
+                escalation_level=1,
+                waiting_state="waiting_manager",
+                sla_due_at=datetime.now(timezone.utc),
+                last_customer_message_at=datetime.now(timezone.utc),
+                last_event_at=datetime.now(timezone.utc),
+            )
+        ],
+    )
+    buckets = [
+        hot,
+        HotTaskBucket(HotTaskBucketKey.NEW_BUSINESS, "New business", "new", []),
+        HotTaskBucket(HotTaskBucketKey.SLA_AT_RISK, "SLA at risk", "waiting_me", []),
+        HotTaskBucket(HotTaskBucketKey.URGENT_ESCALATED, "Urgent / VIP / escalated", "urgent", []),
+        HotTaskBucket(HotTaskBucketKey.FAILED_DELIVERY, "Failed delivery", "waiting_me", []),
+    ]
+    rendered = render_hub(
+        actor,
+        presence=PresenceStatus.ONLINE,
+        counts={"new": 2, "mine": 3, "waiting_me": 1, "waiting_customer": 0, "urgent": 1, "escalated": 1, "sla_near": 0, "sla_overdue": 1},
+        buckets=buckets,
+    )
+    assert "ManagerBot Workdesk" in rendered
+    assert "Hot tasks" in rendered
+    assert "Needs reply now: 1" in rendered
+    assert "#300" in rendered
+    assert "Queue summary" in rendered
+    assert "New/Unassigned: 2" in rendered
