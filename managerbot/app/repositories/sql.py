@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.models import CaseDetail, DeliverySnapshot, InternalNote, ManagerActor, PresenceStatus, QueueItem, SystemRole, ThreadEntry
+from app.models import CaseDetail, DeliverySnapshot, InternalNote, ManagerActor, NotificationEvent, PresenceStatus, QueueItem, SystemRole, ThreadEntry
 
 
 class SqlActorRepository:
@@ -26,8 +27,26 @@ class SqlActorRepository:
             row = (await session.execute(query, {"telegram_user_id": telegram_user_id})).first()
         if not row:
             return None
-        role = SystemRole(row.role)
-        return ManagerActor(actor_id=row.id, telegram_user_id=row.telegram_user_id, display_name=row.display_name, role=role)
+        return ManagerActor(actor_id=row.id, telegram_user_id=row.telegram_user_id, display_name=row.display_name, role=SystemRole(row.role))
+
+    async def list_internal_recipients(self) -> list[tuple[str, int, str, str]]:
+        query = text(
+            """
+            select
+                a.id as actor_id,
+                b.telegram_user_id,
+                ar.role,
+                coalesce(mps.presence_status, 'offline') as presence_status
+            from core.actors a
+            join core.actor_telegram_bindings b on b.actor_id = a.id
+            join core.actor_roles ar on ar.actor_id = a.id
+            left join ops.manager_presence_states mps on mps.actor_id = a.id
+            where ar.role in ('OWNER', 'MANAGER')
+            """
+        )
+        async with self._sf() as session:
+            rows = (await session.execute(query)).all()
+        return [(str(r.actor_id), int(r.telegram_user_id), str(r.role), str(r.presence_status)) for r in rows]
 
 
 class SqlPresenceRepository:
@@ -36,14 +55,7 @@ class SqlPresenceRepository:
 
     async def get_status(self, actor_id):
         async with self._sf() as session:
-            row = (
-                await session.execute(
-                    text(
-                        "select presence_status from ops.manager_presence_states where actor_id=:actor_id"
-                    ),
-                    {"actor_id": actor_id},
-                )
-            ).first()
+            row = (await session.execute(text("select presence_status from ops.manager_presence_states where actor_id=:actor_id"), {"actor_id": actor_id})).first()
         return PresenceStatus(row.presence_status) if row else PresenceStatus.ONLINE
 
     async def set_status(self, actor_id, status: PresenceStatus) -> None:
@@ -66,34 +78,41 @@ class SqlQueueRepository:
         self._sf = session_factory
 
     async def summary_counts(self, actor_id):
-        keys = ["new", "mine", "waiting_me", "waiting_customer", "urgent", "escalated"]
+        keys = ["new", "mine", "waiting_me", "waiting_customer", "urgent", "escalated", "sla_near", "sla_overdue"]
         result = {k: 0 for k in keys}
+        now = datetime.now(timezone.utc)
+        near_cutoff = now.timestamp() + 1800
         async with self._sf() as session:
             rows = (
                 await session.execute(
                     text(
                         """
-                        select
-                            case
-                                when s.status = 'new' then 'new'
-                                when s.assigned_manager_actor_id = :actor_id and s.status in ('new', 'active') and s.waiting_state in ('none', 'waiting_manager', 'waiting_owner') then 'waiting_me'
-                                when s.assigned_manager_actor_id = :actor_id and s.status in ('new', 'active') then 'mine'
-                                when s.status = 'active' and s.waiting_state = 'waiting_customer' then 'waiting_customer'
-                                when s.priority = 'urgent' and s.status not in ('resolved', 'closed') then 'urgent'
-                                when s.escalation_level > 0 and s.status not in ('resolved', 'closed') then 'escalated'
-                                else null
-                            end as queue_key,
-                            count(*) as c
-                        from ops.quote_case_ops_states s
-                        group by queue_key
+                        select status, waiting_state, priority, escalation_level, assigned_manager_actor_id, sla_due_at
+                        from ops.quote_case_ops_states
                         """
-                    ),
-                    {"actor_id": actor_id},
+                    )
                 )
             ).all()
         for row in rows:
-            if row.queue_key in result:
-                result[row.queue_key] = row.c
+            if row.status == "new":
+                result["new"] += 1
+            if row.assigned_manager_actor_id == actor_id and row.status in ("new", "active"):
+                result["mine"] += 1
+                if row.waiting_state in ("none", "waiting_manager", "waiting_owner"):
+                    result["waiting_me"] += 1
+            if row.status == "active" and row.waiting_state == "waiting_customer":
+                result["waiting_customer"] += 1
+            if row.priority == "urgent" and row.status not in ("resolved", "closed"):
+                result["urgent"] += 1
+            if row.escalation_level > 0 and row.status not in ("resolved", "closed"):
+                result["escalated"] += 1
+            if row.sla_due_at:
+                due = row.sla_due_at
+                due_ts = due.timestamp() if hasattr(due, "timestamp") else datetime.fromisoformat(str(due)).timestamp()
+                if due_ts <= now.timestamp():
+                    result["sla_overdue"] += 1
+                elif due_ts <= near_cutoff:
+                    result["sla_near"] += 1
         return result
 
     async def list_queue(self, queue_key, actor_id, offset, limit):
@@ -117,30 +136,42 @@ class SqlQueueRepository:
                 s.assigned_manager_actor_id,
                 s.priority,
                 s.escalation_level,
-                s.last_customer_message_at
+                s.last_customer_message_at,
+                s.sla_due_at
             from ops.quote_case_ops_states s
             join core.quote_cases qc on qc.id = s.quote_case_id
             where {condition}
-            order by
-                case s.priority when 'urgent' then 0 when 'high' then 1 else 2 end,
-                s.escalation_level desc,
-                coalesce(s.last_customer_message_at, s.updated_at) desc,
-                qc.display_number asc
-            limit :limit offset :offset
             """
         )
         async with self._sf() as session:
-            rows = (
-                await session.execute(
-                    query,
-                    {
-                        "actor_id": actor_id,
-                        "offset": offset,
-                        "limit": limit,
-                    },
-                )
-            ).all()
-        return [QueueItem(**row._mapping) for row in rows]
+            rows = (await session.execute(query, {"actor_id": actor_id})).all()
+        items = [QueueItem(**row._mapping) for row in rows]
+        now_ts = datetime.now(timezone.utc).timestamp()
+
+        def sla_rank(item: QueueItem) -> int:
+            if not item.sla_due_at:
+                return 2
+            due_ts = item.sla_due_at.timestamp() if hasattr(item.sla_due_at, "timestamp") else datetime.fromisoformat(str(item.sla_due_at)).timestamp()
+            if due_ts <= now_ts:
+                return 0
+            if due_ts <= now_ts + 1800:
+                return 1
+            return 2
+
+        def prio_rank(item: QueueItem) -> int:
+            return {"urgent": 0, "high": 1}.get(item.priority, 2)
+
+        epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        items.sort(
+            key=lambda i: (
+                prio_rank(i),
+                sla_rank(i),
+                -i.escalation_level,
+                i.sla_due_at or i.last_customer_message_at or epoch,
+                i.case_display_number,
+            )
+        )
+        return items[offset : offset + limit]
 
 
 class SqlCaseRepository:
@@ -154,7 +185,7 @@ class SqlCaseRepository:
                     text(
                         """
                         select qc.id as case_id, qc.display_number as case_display_number, qc.status as commercial_status,
-                               ops.status as operational_status, ops.waiting_state, ops.priority, ops.escalation_level,
+                               ops.status as operational_status, ops.waiting_state, ops.priority, ops.escalation_level, ops.sla_due_at,
                                coalesce(am.display_name, 'Unassigned') as assignment_label,
                                o.display_number as linked_order_display_number
                         from core.quote_cases qc
@@ -221,14 +252,7 @@ class SqlCaseRepository:
 
     async def claim_case(self, case_id, actor_id):
         async with self._sf() as session:
-            current = (
-                await session.execute(
-                    text(
-                        "select assigned_manager_actor_id from ops.quote_case_ops_states where quote_case_id=:case_id"
-                    ),
-                    {"case_id": case_id},
-                )
-            ).first()
+            current = (await session.execute(text("select assigned_manager_actor_id from ops.quote_case_ops_states where quote_case_id=:case_id"), {"case_id": case_id})).first()
             if not current:
                 return False
             result = await session.execute(
@@ -246,37 +270,14 @@ class SqlCaseRepository:
                 ),
                 {"case_id": case_id, "actor_id": actor_id},
             )
-            next_seq = (
-                await session.execute(
-                    text(
-                        "select coalesce(max(event_seq), 0) + 1 as next_seq from ops.quote_case_assignment_events where quote_case_id=:case_id"
-                    ),
-                    {"case_id": case_id},
-                )
-            ).scalar_one()
+            next_seq = (await session.execute(text("select coalesce(max(event_seq), 0) + 1 as next_seq from ops.quote_case_assignment_events where quote_case_id=:case_id"), {"case_id": case_id})).scalar_one()
             await session.execute(
                 text(
                     """
                     insert into ops.quote_case_assignment_events(
-                        id,
-                        quote_case_id,
-                        event_seq,
-                        event_kind,
-                        from_manager_actor_id,
-                        to_manager_actor_id,
-                        triggered_by_actor_id,
-                        created_at,
-                        updated_at
+                        id, quote_case_id, event_seq, event_kind, from_manager_actor_id, to_manager_actor_id, triggered_by_actor_id, created_at, updated_at
                     ) values (
-                         :event_id,
-                        :case_id,
-                        :event_seq,
-                        :event_kind,
-                        :from_actor_id,
-                        :to_actor_id,
-                        :triggered_by_actor_id,
-                        CURRENT_TIMESTAMP,
-                        CURRENT_TIMESTAMP
+                         :event_id, :case_id, :event_seq, :event_kind, :from_actor_id, :to_actor_id, :triggered_by_actor_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
                     )
                     """
                 ),
@@ -293,11 +294,55 @@ class SqlCaseRepository:
             await session.commit()
         return result.rowcount > 0
 
+    async def escalate_to_owner(self, case_id, actor_id):
+        async with self._sf() as session:
+            owner_row = (await session.execute(text("select actor_id from core.actor_roles where role='OWNER' order by actor_id asc limit 1"))).first()
+            current = (await session.execute(text("select assigned_manager_actor_id from ops.quote_case_ops_states where quote_case_id=:case_id"), {"case_id": case_id})).first()
+            if not owner_row or not current:
+                return False
+            result = await session.execute(
+                text(
+                    """
+                    update ops.quote_case_ops_states
+                    set escalation_level = 1,
+                        priority = case when priority='urgent' then 'urgent' else 'high' end,
+                        assigned_manager_actor_id = :owner_actor_id,
+                        assigned_by_actor_id = :actor_id,
+                        assigned_at = CURRENT_TIMESTAMP,
+                        waiting_state = 'waiting_owner',
+                        status = 'active',
+                        updated_at = CURRENT_TIMESTAMP
+                    where quote_case_id = :case_id
+                    """
+                ),
+                {"case_id": case_id, "owner_actor_id": owner_row.actor_id, "actor_id": actor_id},
+            )
+            next_seq = (await session.execute(text("select coalesce(max(event_seq), 0) + 1 as next_seq from ops.quote_case_assignment_events where quote_case_id=:case_id"), {"case_id": case_id})).scalar_one()
+            await session.execute(
+                text(
+                    """
+                    insert into ops.quote_case_assignment_events(
+                        id, quote_case_id, event_seq, event_kind, from_manager_actor_id, to_manager_actor_id, triggered_by_actor_id, created_at, updated_at
+                    ) values (
+                        :id, :case_id, :event_seq, 'escalated_to_owner', :from_actor_id, :to_actor_id, :triggered_by_actor_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                    )
+                    """
+                ),
+                {
+                    "id": str(uuid4()),
+                    "case_id": case_id,
+                    "event_seq": next_seq,
+                    "from_actor_id": current.assigned_manager_actor_id,
+                    "to_actor_id": owner_row.actor_id,
+                    "triggered_by_actor_id": actor_id,
+                },
+            )
+            await session.commit()
+        return result.rowcount > 0
+
     async def add_internal_note(self, case_id, actor_id, body_text):
         async with self._sf() as session:
-            exists = (
-                await session.execute(text("select 1 from ops.quote_case_ops_states where quote_case_id=:case_id"), {"case_id": case_id})
-            ).first()
+            exists = (await session.execute(text("select 1 from ops.quote_case_ops_states where quote_case_id=:case_id"), {"case_id": case_id})).first()
             if not exists:
                 return False
             await session.execute(
@@ -322,10 +367,7 @@ class SqlCaseRepository:
                     text(
                         """
                         select qc.id,
-                               coalesce(
-                                   qc.customer_telegram_chat_id,
-                                   b.telegram_user_id
-                               ) as customer_chat_id
+                               coalesce(qc.customer_telegram_chat_id, b.telegram_user_id) as customer_chat_id
                         from core.quote_cases qc
                         left join core.actor_telegram_bindings b on b.actor_id = qc.customer_actor_id
                         where qc.id=:case_id
@@ -420,3 +462,75 @@ class SqlCaseRepository:
                     {"thread_entry_id": thread_entry_id},
                 )
             await session.commit()
+
+
+class SqlNotificationRepository:
+    def __init__(self, session_factory: async_sessionmaker) -> None:
+        self._sf = session_factory
+
+    async def poll_events(self) -> list[NotificationEvent]:
+        async with self._sf() as session:
+            rows = (
+                await session.execute(
+                    text(
+                        """
+                        select
+                            'case_visible:' || s.quote_case_id || ':' || coalesce(s.updated_at::text, '') as event_key,
+                            'case_visible' as kind,
+                            s.quote_case_id as case_id,
+                            qc.display_number as case_display_number,
+                            s.assigned_manager_actor_id,
+                            null as summary
+                        from ops.quote_case_ops_states s
+                        join core.quote_cases qc on qc.id = s.quote_case_id
+                        where s.status = 'new'
+                        union all
+                        select
+                            'new_inbound:' || t.id as event_key,
+                            'new_inbound' as kind,
+                            t.quote_case_id as case_id,
+                            qc.display_number as case_display_number,
+                            s.assigned_manager_actor_id,
+                            substr(t.body_text, 1, 120) as summary
+                        from ops.quote_case_thread_entries t
+                        join ops.quote_case_ops_states s on s.quote_case_id = t.quote_case_id
+                        join core.quote_cases qc on qc.id = t.quote_case_id
+                        where t.direction = 'inbound'
+                        union all
+                        select
+                            'assigned_to_me:' || e.id as event_key,
+                            'assigned_to_me' as kind,
+                            e.quote_case_id as case_id,
+                            qc.display_number as case_display_number,
+                            e.to_manager_actor_id as assigned_manager_actor_id,
+                            null as summary
+                        from ops.quote_case_assignment_events e
+                        join core.quote_cases qc on qc.id = e.quote_case_id
+                        where e.event_kind in ('claimed', 'assigned', 'reassigned', 'escalated_to_owner')
+                        union all
+                        select
+                            'delivery_failed:' || a.id as event_key,
+                            'delivery_failed' as kind,
+                            a.quote_case_id as case_id,
+                            qc.display_number as case_display_number,
+                            s.assigned_manager_actor_id,
+                            coalesce(a.error_message, 'delivery_failed') as summary
+                        from ops.reply_delivery_attempts a
+                        join ops.quote_case_ops_states s on s.quote_case_id = a.quote_case_id
+                        join core.quote_cases qc on qc.id = a.quote_case_id
+                        where a.status = 'failed'
+                        """
+                    )
+                )
+            ).all()
+        return [
+            NotificationEvent(
+                event_key=str(r.event_key),
+                kind=str(r.kind),
+                case_id=r.case_id,
+                case_display_number=int(r.case_display_number),
+                assigned_manager_actor_id=r.assigned_manager_actor_id,
+                summary=r.summary,
+            )
+            for r in rows
+        ]

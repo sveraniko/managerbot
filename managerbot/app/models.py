@@ -46,6 +46,7 @@ class QueueItem:
     priority: str
     escalation_level: int
     last_customer_message_at: datetime | None
+    sla_due_at: datetime | None = None
 
 
 @dataclass(slots=True)
@@ -71,6 +72,17 @@ class DeliverySnapshot:
 
 
 @dataclass(slots=True)
+class NotificationEvent:
+    event_key: str
+    kind: str
+    case_id: UUID
+    case_display_number: int
+    assigned_manager_actor_id: UUID | None
+    assigned_manager_presence: PresenceStatus | None = None
+    summary: str | None = None
+
+
+@dataclass(slots=True)
 class CaseDetail:
     case_id: UUID
     case_display_number: int
@@ -80,6 +92,7 @@ class CaseDetail:
     priority: str
     escalation_level: int
     assignment_label: str
+    sla_due_at: datetime | None = None
     linked_order_display_number: int | None = None
     linked_quote_display_number: int | None = None
     thread_entries: list[ThreadEntry] = field(default_factory=list)

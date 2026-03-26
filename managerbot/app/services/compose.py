@@ -24,5 +24,8 @@ class ComposeStateService:
         state.compose_draft_text = None
         return state
 
+    def back_to_case(self, state: ManagerSessionState) -> ManagerSessionState:
+        return self.cancel(state)
+
     def is_stale(self, state: ManagerSessionState) -> bool:
         return bool(state.compose_mode and state.compose_case_id and state.compose_case_id != state.selected_case_id)

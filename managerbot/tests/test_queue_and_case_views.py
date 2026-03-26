@@ -73,6 +73,7 @@ def test_case_detail_render_read_only_and_claim_updates() -> None:
     assert "Internal notes:" in before
     assert "Case #777" in before
     assert "Order #88" in before
+    assert "SLA: healthy" in before
 
     claimed = asyncio.run(service.claim_case(actor, case_id))
     assert claimed

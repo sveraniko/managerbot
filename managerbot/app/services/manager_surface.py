@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.models import CaseDetail, ManagerActor, PresenceStatus, QueueItem
 from app.repositories.contracts import CaseRepository, PresenceRepository, QueueRepository
 from app.services.delivery import CustomerDeliveryGateway
+from app.services.sla import SlaService
 from app.state.manager_session import ManagerSessionState
 
 
@@ -14,12 +15,14 @@ class ManagerSurfaceService:
         presence_repo: PresenceRepository,
         delivery_gateway: CustomerDeliveryGateway,
         page_size: int = 5,
+        sla_service: SlaService | None = None,
     ) -> None:
         self._queue_repo = queue_repo
         self._case_repo = case_repo
         self._presence_repo = presence_repo
         self._delivery_gateway = delivery_gateway
         self._page_size = page_size
+        self._sla_service = sla_service or SlaService()
 
     async def hub_view(self, actor: ManagerActor) -> tuple[PresenceStatus, dict[str, int]]:
         presence = await self._presence_repo.get_status(actor.actor_id)
@@ -42,6 +45,12 @@ class ManagerSurfaceService:
 
     async def claim_case(self, actor: ManagerActor, case_id) -> bool:
         return await self._case_repo.claim_case(case_id, actor.actor_id)
+
+    async def escalate_to_owner(self, actor: ManagerActor, case_id) -> bool:
+        return await self._case_repo.escalate_to_owner(case_id, actor.actor_id)
+
+    def case_sla_state(self, detail: CaseDetail) -> str:
+        return self._sla_service.classify(detail.sla_due_at)
 
     async def save_internal_note(self, actor: ManagerActor, case_id, body_text: str) -> bool:
         return await self._case_repo.add_internal_note(case_id, actor.actor_id, body_text)

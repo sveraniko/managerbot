@@ -65,6 +65,7 @@ async def _make_session_factory() -> async_sessionmaker:
                     assigned_by_actor_id text,
                     assigned_at text,
                     escalation_level integer not null,
+                    sla_due_at text,
                     last_customer_message_at text,
                     last_manager_message_at text,
                     updated_at text not null
@@ -149,9 +150,9 @@ async def _make_session_factory() -> async_sessionmaker:
             )
         )
 
-        await conn.execute(text("insert into core.actors(id, display_name) values ('m1', 'Manager One'), ('m2', 'Manager Two'), ('cust', 'Customer')"))
+        await conn.execute(text("insert into core.actors(id, display_name) values ('m1', 'Manager One'), ('m2', 'Manager Two'), ('owner', 'Owner'), ('cust', 'Customer')"))
         await conn.execute(text("insert into core.actor_telegram_bindings(actor_id, telegram_user_id) values ('m1', 1001), ('cust', 7777)"))
-        await conn.execute(text("insert into core.actor_roles(actor_id, role) values ('m1', 'MANAGER'), ('cust', 'CUSTOMER')"))
+        await conn.execute(text("insert into core.actor_roles(actor_id, role) values ('m1', 'MANAGER'), ('owner', 'OWNER'), ('cust', 'CUSTOMER')"))
 
         await conn.execute(
             text(
@@ -172,11 +173,11 @@ async def _make_session_factory() -> async_sessionmaker:
                 insert into ops.quote_case_ops_states(
                     id, quote_case_id, status, waiting_state, priority,
                     assigned_manager_actor_id, assigned_by_actor_id, assigned_at,
-                    escalation_level, last_customer_message_at, updated_at
+                    escalation_level, sla_due_at, last_customer_message_at, updated_at
                 ) values
-                ('s1', 'c1', 'new', 'none', 'high', null, null, null, 0, :now, null, :now),
-                ('s2', 'c2', 'active', 'waiting_manager', 'urgent', 'm1', 'm1', :now, 0, :now, null, :now),
-                ('s3', 'c3', 'active', 'waiting_customer', 'normal', 'm1', 'm1', :now, 1, :now, null, :now)
+                ('s1', 'c1', 'new', 'none', 'high', null, null, null, 0, null, :now, :now),
+                ('s2', 'c2', 'active', 'waiting_manager', 'urgent', 'm1', 'm1', :now, 0, :now, :now, :now),
+                ('s3', 'c3', 'active', 'waiting_customer', 'normal', 'm1', 'm1', :now, 1, null, :now, :now)
                 """
             ),
             {"now": now},
@@ -239,6 +240,7 @@ def test_queue_repository_summary_filters_and_order() -> None:
         assert counts["new"] == 1
         assert counts["waiting_me"] == 1
         assert counts["waiting_customer"] == 1
+        assert counts["sla_overdue"] == 1
 
         urgent = await repo.list_queue("urgent", "m1", 0, 10)
         assert [item.case_display_number for item in urgent] == [102]
@@ -289,6 +291,27 @@ def test_case_detail_and_claim_persist_canonical_assignment_event() -> None:
             assert event.from_manager_actor_id is None
             assert event.to_manager_actor_id == "m1"
             assert event.triggered_by_actor_id == "m1"
+
+    asyncio.run(run())
+
+
+def test_escalate_to_owner_updates_state_and_assignment_event() -> None:
+    async def run() -> None:
+        sf = await _make_session_factory()
+        cases = SqlCaseRepository(sf)
+
+        escalated = await cases.escalate_to_owner("c1", "m1")
+        assert escalated is True
+
+        async with sf() as session:
+            state = (await session.execute(text("select assigned_manager_actor_id, waiting_state, escalation_level from ops.quote_case_ops_states where quote_case_id='c1'"))).first()
+            assert state.assigned_manager_actor_id == "owner"
+            assert state.waiting_state == "waiting_owner"
+            assert state.escalation_level == 1
+
+            event = (await session.execute(text("select event_kind, to_manager_actor_id from ops.quote_case_assignment_events where quote_case_id='c1' order by event_seq desc limit 1"))).first()
+            assert event.event_kind == "escalated_to_owner"
+            assert event.to_manager_actor_id == "owner"
 
     asyncio.run(run())
 
