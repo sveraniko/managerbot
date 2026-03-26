@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     ai_recommender_max_output_tokens: int = Field(default=700)
     ai_cache_ttl_seconds: int = Field(default=120)
     ai_min_confidence_for_draft_adoption_warning: float = Field(default=0.65)
+    handoff_production_chat_id: int | None = Field(default=None)
+    handoff_warehouse_chat_id: int | None = Field(default=None)
+    handoff_accountant_chat_id: int | None = Field(default=None)
 
 
 def get_settings() -> Settings:

@@ -140,6 +140,10 @@ class CaseDetail:
     assignment_label: str
     sla_due_at: datetime | None = None
     linked_order_display_number: int | None = None
+    linked_order_status: str | None = None
+    linked_order_summary: str | None = None
+    linked_order_pdf_url: str | None = None
+    linked_order_document_label: str | None = None
     linked_quote_display_number: int | None = None
     customer_label: str | None = None
     customer_card: CustomerCard | None = None

@@ -13,6 +13,7 @@ from app.bot.keyboards import (
     compose_keyboard,
     filters_keyboard,
     hub_keyboard,
+    order_actions_keyboard,
     note_preview_keyboard,
     queue_keyboard,
     reply_preview_keyboard,
@@ -27,11 +28,13 @@ from app.services.ai_state import analysis_for_case, bind_ai_recommendation, bin
 from app.services.compose import ComposeStateService
 from app.services.manager_surface import ManagerSurfaceService
 from app.services.navigation import NavigationService
+from app.services.order_actions import HandoffTargets, build_order_compact_summary, has_order, has_order_pdf, target_label
 from app.services.rendering import (
     render_case_detail,
     render_contact_actions_panel,
     render_filters,
     render_hub,
+    render_order_summary_panel,
     render_queue,
     render_search_results,
 )
@@ -44,6 +47,7 @@ def build_router(
     surface_service: ManagerSurfaceService,
     navigation_service: NavigationService,
     panel_manager: PanelManager,
+    handoff_targets: HandoffTargets,
 ) -> Router:
     router = Router(name="managerbot")
     compose_service = ComposeStateService()
@@ -77,7 +81,11 @@ def build_router(
                 ai_recommendation_meta=ai_recommendation_meta,
                 low_confidence_threshold=surface_service.low_confidence_threshold,
             ),
-            case_keyboard(has_ai_recommendation=ai_recommendation is not None, ai_low_confidence=low_conf),
+            case_keyboard(
+                has_ai_recommendation=ai_recommendation is not None,
+                ai_low_confidence=low_conf,
+                has_order_actions=has_order(detail),
+            ),
         )
 
     @router.message(CommandStart())
@@ -272,6 +280,71 @@ def build_router(
         elif callback_data.action == "contact_back":
             state.panel_key = "case:detail"
             await render_selected_case(msg, actor, state)
+        elif callback_data.action == "order_summary_open":
+            if not state.selected_case_id:
+                await callback.answer("Open a case first", show_alert=True)
+            else:
+                detail = await surface_service.case_detail(actor, state.selected_case_id)
+                if not detail or not has_order(detail):
+                    await callback.answer("No linked order for this case.", show_alert=True)
+                else:
+                    state = navigation_service.open_panel(state, "case:order")
+                    targets = _configured_handoff_targets(handoff_targets)
+                    await panel_manager.render(
+                        msg,
+                        render_order_summary_panel(detail, configured_targets=targets),
+                        order_actions_keyboard(has_pdf=has_order_pdf(detail), configured_targets=targets),
+                    )
+        elif callback_data.action == "order_send_summary_here":
+            if not state.selected_case_id:
+                await callback.answer("Open a case first", show_alert=True)
+            else:
+                detail = await surface_service.case_detail(actor, state.selected_case_id)
+                if not detail or not has_order(detail):
+                    await callback.answer("No linked order for this case.", show_alert=True)
+                else:
+                    await msg.answer(build_order_compact_summary(detail))
+        elif callback_data.action == "order_send_pdf_here":
+            if not state.selected_case_id:
+                await callback.answer("Open a case first", show_alert=True)
+            else:
+                detail = await surface_service.case_detail(actor, state.selected_case_id)
+                if not detail or not has_order(detail):
+                    await callback.answer("No linked order for this case.", show_alert=True)
+                elif not detail.linked_order_pdf_url:
+                    await callback.answer("Order PDF/document is not available.", show_alert=True)
+                else:
+                    label = detail.linked_order_document_label or "Order PDF"
+                    await msg.answer(f"{label}: {detail.linked_order_pdf_url}")
+        elif callback_data.action == "order_handoff":
+            if not state.selected_case_id:
+                await callback.answer("Open a case first", show_alert=True)
+            else:
+                detail = await surface_service.case_detail(actor, state.selected_case_id)
+                if not detail or not has_order(detail):
+                    await callback.answer("No linked order for this case.", show_alert=True)
+                else:
+                    target_key = callback_data.value
+                    target_chat_id = handoff_targets.chat_id_for(target_key)
+                    label = target_label(target_key)
+                    if not target_chat_id:
+                        await callback.answer(f"{label} target is not configured.", show_alert=True)
+                    else:
+                        text = build_order_compact_summary(detail, handoff_target_label=label)
+                        await msg.bot.send_message(chat_id=target_chat_id, text=text)
+                        await surface_service.save_internal_note(
+                            actor,
+                            state.selected_case_id,
+                            f"Order handoff sent to {label} (chat {target_chat_id}) for Order #{detail.linked_order_display_number}.",
+                        )
+                        await panel_manager.render(
+                            msg,
+                            f"Handoff sent to {label}.\n\n" + render_order_summary_panel(detail, configured_targets=_configured_handoff_targets(handoff_targets)),
+                            order_actions_keyboard(has_pdf=has_order_pdf(detail), configured_targets=_configured_handoff_targets(handoff_targets)),
+                        )
+        elif callback_data.action == "order_back":
+            state.panel_key = "case:detail"
+            await render_selected_case(msg, actor, state)
         elif callback_data.action == "reply_confirm":
             if state.compose_mode != "reply" or not state.compose_case_id or not state.compose_draft_text:
                 await callback.answer("No reply draft to send.", show_alert=True)
@@ -429,3 +502,11 @@ def _reset_filters(state) -> None:
     state.filter_sla_scope = "any"
     state.filter_escalation_scope = "any"
     state.filter_lifecycle_scope = "active"
+
+
+def _configured_handoff_targets(targets: HandoffTargets) -> dict[str, bool]:
+    return {
+        "production": targets.production_chat_id is not None,
+        "warehouse": targets.warehouse_chat_id is not None,
+        "accountant": targets.accountant_chat_id is not None,
+    }
