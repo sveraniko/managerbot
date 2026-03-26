@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from app.models import CaseDetail, HotTaskBucket, HotTaskItem, ManagerActor, PresenceStatus, QueueItem
+from app.models import CaseDetail, HotTaskBucket, HotTaskItem, ManagerActor, PresenceStatus, QueueFilters, QueueItem, SearchResultItem
 from app.services.ai_reader import AIReaderAnalysis
 from app.services.ai_recommender import AIRecommendation
 from app.services.ai_state import AISnapshotMeta
@@ -46,13 +46,17 @@ def render_hub(actor: ManagerActor, presence: PresenceStatus, counts: dict[str, 
     return "\\n".join(lines)
 
 
-def render_queue(queue_key: str, items: list[QueueItem], offset: int) -> str:
+def render_queue(queue_key: str, items: list[QueueItem], offset: int, filters: QueueFilters | None = None) -> str:
     sla = SlaService()
-    lines = [f"Queue: {queue_key}", f"Offset: {offset}", ""]
+    lines = [f"Queue: {queue_key}", f"Offset: {offset}"]
+    if filters:
+        lines.append(f"Filters: {render_filters(filters)}")
+    lines.append("")
     for item in items:
         sla_state = sla.classify(item.sla_due_at)
+        archive_mark = " [ARCHIVE]" if item.is_archived else ""
         lines.append(
-            f"#{item.case_display_number} | {item.customer_label or '-'} | {item.operational_status}/{item.waiting_state} | sla:{sla_state} | p:{item.priority} e:{item.escalation_level}"
+            f"#{item.case_display_number}{archive_mark} | {item.customer_label or '-'} | {item.operational_status}/{item.waiting_state} | sla:{sla_state} | p:{item.priority} e:{item.escalation_level}"
         )
     if not items:
         lines.append("No cases in this queue.")
@@ -77,7 +81,7 @@ def render_case_detail(
         f"Operational: {detail.operational_status}",
         f"Waiting: {detail.waiting_state}",
         f"Assignment: {detail.assignment_label}",
-        f"Priority/Escalation: {detail.priority}/{detail.escalation_level}",
+        f"Priority/Escalation: {detail.priority.upper()}/{detail.escalation_level}",
         f"SLA: {sla_state}",
         f"Quote #{detail.linked_quote_display_number}",
     ]
@@ -169,6 +173,31 @@ def _render_hot_task_item(item: HotTaskItem) -> str:
     if item.last_event_at:
         cues.append(f"t:{_age_hint(item.last_event_at)}")
     return f"#{item.case_display_number}{order_suffix} {customer} — {item.reason} ({', '.join(cues)})"
+
+
+def render_search_results(query: str, results: list[SearchResultItem], filters: QueueFilters | None = None) -> str:
+    lines = [f"Search: {query}"]
+    if filters:
+        lines.append(f"Filters: {render_filters(filters)}")
+    lines.append("")
+    if not results:
+        lines.append("No cases found.")
+        lines.append("Try case/order number or customer label.")
+        return "\\n".join(lines)
+    for item in results:
+        archive_mark = " [ARCHIVE]" if item.is_archived else ""
+        order_hint = f" O#{item.linked_order_display_number}" if item.linked_order_display_number else ""
+        lines.append(
+            f"#{item.case_display_number}{archive_mark}{order_hint} | {item.customer_label or '-'} | {item.operational_status}/{item.waiting_state} | p:{item.priority} e:{item.escalation_level}"
+        )
+    return "\\n".join(lines)
+
+
+def render_filters(filters: QueueFilters) -> str:
+    return (
+        f"lifecycle={filters.lifecycle_scope}, assignment={filters.assignment_scope}, waiting={filters.waiting_scope}, "
+        f"priority={filters.priority_scope}, escalation={filters.escalation_scope}, sla={filters.sla_scope}"
+    )
 
 
 def _age_hint(ts: datetime) -> str:

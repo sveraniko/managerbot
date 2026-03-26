@@ -7,14 +7,25 @@ from aiogram.filters import CommandStart
 from aiogram.types import CallbackQuery, Message
 
 from app.bot.callbacks import MBCallback
-from app.bot.keyboards import case_keyboard, compose_keyboard, hub_keyboard, note_preview_keyboard, queue_keyboard, reply_preview_keyboard
+from app.bot.keyboards import (
+    case_keyboard,
+    compose_keyboard,
+    filters_keyboard,
+    hub_keyboard,
+    note_preview_keyboard,
+    queue_keyboard,
+    reply_preview_keyboard,
+    search_input_keyboard,
+    search_results_keyboard,
+)
 from app.bot.panel_manager import PanelManager
+from app.models import QueueFilters
 from app.services.access import AccessService
 from app.services.ai_state import analysis_for_case, bind_ai_recommendation, bind_ai_result, clear_ai_snapshot, recommendation_for_case
 from app.services.compose import ComposeStateService
 from app.services.manager_surface import ManagerSurfaceService
 from app.services.navigation import NavigationService
-from app.services.rendering import render_case_detail, render_hub, render_queue
+from app.services.rendering import render_case_detail, render_filters, render_hub, render_queue, render_search_results
 from app.state.manager_session import ManagerSessionStore
 
 
@@ -78,6 +89,19 @@ def build_router(
         if not actor:
             return
         state = await session_store.get(message.from_user.id)
+        if state.search_mode:
+            query = message.text.strip()
+            state.search_query = query
+            state.search_mode = False
+            state = navigation_service.open_panel(state, "search:results")
+            results = await surface_service.search_cases(actor, query, state)
+            await panel_manager.render(
+                message,
+                render_search_results(query, results, _filters_from_state(state)),
+                search_results_keyboard(results),
+            )
+            await session_store.set(message.from_user.id, state)
+            return
         if state.compose_mode not in {"reply", "note"}:
             return
         if compose_service.is_stale(state):
@@ -127,11 +151,11 @@ def build_router(
             state.queue_key = callback_data.value
             state.queue_offset = 0
             items = await surface_service.queue_page(actor, state)
-            await panel_manager.render(msg, render_queue(callback_data.value, items, state.queue_offset), queue_keyboard(items))
+            await panel_manager.render(msg, render_queue(callback_data.value, items, state.queue_offset, _filters_from_state(state)), queue_keyboard(items))
         elif callback_data.action == "load_more":
             state.queue_offset += surface_service._page_size
             items = await surface_service.queue_page(actor, state)
-            await panel_manager.render(msg, render_queue(state.queue_key or "", items, state.queue_offset), queue_keyboard(items))
+            await panel_manager.render(msg, render_queue(state.queue_key or "", items, state.queue_offset, _filters_from_state(state)), queue_keyboard(items))
         elif callback_data.action == "case":
             state = navigation_service.open_panel(state, "case:detail")
             next_case_id = UUID(callback_data.value)
@@ -149,6 +173,36 @@ def build_router(
         elif callback_data.action == "escalate_owner" and state.selected_case_id:
             ok = await surface_service.escalate_to_owner(actor, state.selected_case_id)
             await render_selected_case(msg, actor, state, prefix="Escalated to owner.\n\n" if ok else "Escalation failed.\n\n")
+        elif callback_data.action == "set_priority" and state.selected_case_id:
+            ok = await surface_service.update_case_priority(actor, state.selected_case_id, callback_data.value)
+            await render_selected_case(msg, actor, state, prefix=f"Priority updated to {callback_data.value}.\n\n" if ok else "Priority update failed.\n\n")
+        elif callback_data.action == "search_start":
+            state.search_mode = True
+            state = navigation_service.open_panel(state, "search:input")
+            await panel_manager.render(
+                msg,
+                "Search mode is active.\nSend query text (case #, order #, customer).\nExample: Q-101, O-9001, Acme.",
+                search_input_keyboard(),
+            )
+        elif callback_data.action == "search_cancel":
+            state.search_mode = False
+            state.search_query = None
+            state = navigation_service.back(state)
+            if state.panel_key.startswith("queue:") and state.queue_key:
+                items = await surface_service.queue_page(actor, state)
+                await panel_manager.render(msg, render_queue(state.queue_key, items, state.queue_offset, _filters_from_state(state)), queue_keyboard(items))
+            else:
+                presence, counts, buckets = await surface_service.hub_view(actor)
+                await panel_manager.render(msg, render_hub(actor, presence, counts, buckets), hub_keyboard(buckets))
+        elif callback_data.action == "filters_open":
+            state = navigation_service.open_panel(state, "filters:panel")
+            await panel_manager.render(msg, f"Active filters\n{render_filters(_filters_from_state(state))}", filters_keyboard(_filters_from_state(state)))
+        elif callback_data.action == "filter_cycle":
+            _cycle_filter(state, callback_data.value)
+            await panel_manager.render(msg, f"Active filters\n{render_filters(_filters_from_state(state))}", filters_keyboard(_filters_from_state(state)))
+        elif callback_data.action == "filters_reset":
+            _reset_filters(state)
+            await panel_manager.render(msg, f"Filters reset.\n{render_filters(_filters_from_state(state))}", filters_keyboard(_filters_from_state(state)))
         elif callback_data.action == "reply_start":
             if not state.selected_case_id:
                 await callback.answer("Open a case first", show_alert=True)
@@ -259,7 +313,10 @@ def build_router(
             state = navigation_service.back(state)
             if state.panel_key.startswith("queue:") and state.queue_key:
                 items = await surface_service.queue_page(actor, state)
-                await panel_manager.render(msg, render_queue(state.queue_key, items, state.queue_offset), queue_keyboard(items))
+                await panel_manager.render(msg, render_queue(state.queue_key, items, state.queue_offset, _filters_from_state(state)), queue_keyboard(items))
+            elif state.panel_key.startswith("search:") and state.search_query:
+                results = await surface_service.search_cases(actor, state.search_query, state)
+                await panel_manager.render(msg, render_search_results(state.search_query, results, _filters_from_state(state)), search_results_keyboard(results))
             else:
                 presence, counts, buckets = await surface_service.hub_view(actor)
                 await panel_manager.render(msg, render_hub(actor, presence, counts, buckets), hub_keyboard(buckets))
@@ -274,3 +331,48 @@ def build_router(
         await callback.answer()
 
     return router
+
+
+def _filters_from_state(state) -> QueueFilters:
+    return QueueFilters(
+        assignment_scope=state.filter_assignment_scope,
+        waiting_scope=state.filter_waiting_scope,
+        priority_scope=state.filter_priority_scope,
+        sla_scope=state.filter_sla_scope,
+        escalation_scope=state.filter_escalation_scope,
+        lifecycle_scope=state.filter_lifecycle_scope,
+    )
+
+
+def _cycle_filter(state, kind: str) -> None:
+    options = {
+        "lifecycle": ["active", "archive", "all"],
+        "assignment": ["any", "mine", "unassigned"],
+        "waiting": ["any", "waiting_manager", "waiting_customer"],
+        "priority": ["any", "high_or_urgent", "urgent_or_vip", "vip"],
+        "escalation": ["any", "escalated"],
+        "sla": ["any", "at_risk"],
+    }
+    attr = {
+        "lifecycle": "filter_lifecycle_scope",
+        "assignment": "filter_assignment_scope",
+        "waiting": "filter_waiting_scope",
+        "priority": "filter_priority_scope",
+        "escalation": "filter_escalation_scope",
+        "sla": "filter_sla_scope",
+    }.get(kind)
+    if not attr:
+        return
+    seq = options[kind]
+    current = getattr(state, attr)
+    nxt = seq[(seq.index(current) + 1) % len(seq)] if current in seq else seq[0]
+    setattr(state, attr, nxt)
+
+
+def _reset_filters(state) -> None:
+    state.filter_assignment_scope = "any"
+    state.filter_waiting_scope = "any"
+    state.filter_priority_scope = "any"
+    state.filter_sla_scope = "any"
+    state.filter_escalation_scope = "any"
+    state.filter_lifecycle_scope = "active"

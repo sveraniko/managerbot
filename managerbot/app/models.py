@@ -28,6 +28,7 @@ class QueueKey(str, Enum):
     SLA_RISK = "sla_risk"
     FAILED_DELIVERY = "failed_delivery"
     URGENT_ESCALATED = "urgent_escalated"
+    ARCHIVE = "archive"
 
 
 class HotTaskBucketKey(str, Enum):
@@ -58,6 +59,7 @@ class QueueItem:
     escalation_level: int
     last_customer_message_at: datetime | None
     sla_due_at: datetime | None = None
+    is_archived: bool = False
 
 
 @dataclass(slots=True)
@@ -133,3 +135,26 @@ class CaseDetail:
     thread_entries: list[ThreadEntry] = field(default_factory=list)
     internal_notes: list[InternalNote] = field(default_factory=list)
     last_delivery: DeliverySnapshot | None = None
+
+
+@dataclass(slots=True)
+class QueueFilters:
+    assignment_scope: str = "any"  # any | mine | unassigned
+    waiting_scope: str = "any"  # any | waiting_manager | waiting_customer
+    priority_scope: str = "any"  # any | high_or_urgent | urgent_or_vip | vip
+    sla_scope: str = "any"  # any | at_risk
+    escalation_scope: str = "any"  # any | escalated
+    lifecycle_scope: str = "active"  # active | archive | all
+
+
+@dataclass(slots=True)
+class SearchResultItem:
+    case_id: UUID
+    case_display_number: int
+    linked_order_display_number: int | None
+    customer_label: str | None
+    operational_status: str
+    waiting_state: str
+    priority: str
+    escalation_level: int
+    is_archived: bool
