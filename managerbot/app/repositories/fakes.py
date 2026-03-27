@@ -128,6 +128,26 @@ class FakeCaseRepository:
         detail.thread_entries.append(ThreadEntry(direction="system", body="Case claimed", created_at=datetime.now(timezone.utc)))
         return True
 
+    async def assign_case(self, case_id: UUID, actor_id: UUID, target_manager_actor_id: UUID):
+        _ = (actor_id, target_manager_actor_id)
+        detail = self.details.get(case_id)
+        if not detail:
+            return False
+        detail.assignment_label = "Assigned"
+        detail.operational_status = "active"
+        detail.waiting_state = "waiting_manager"
+        return True
+
+    async def unassign_case(self, case_id: UUID, actor_id: UUID):
+        _ = actor_id
+        detail = self.details.get(case_id)
+        if not detail:
+            return False
+        detail.assignment_label = "Unassigned"
+        detail.operational_status = "new"
+        detail.waiting_state = "none"
+        return True
+
     async def escalate_to_owner(self, case_id: UUID, actor_id: UUID):
         detail = self.details.get(case_id)
         if not detail:

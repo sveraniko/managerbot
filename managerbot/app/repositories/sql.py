@@ -527,6 +527,45 @@ class SqlCaseRepository:
     def __init__(self, session_factory: async_sessionmaker) -> None:
         self._sf = session_factory
 
+    async def _append_assignment_event(
+        self,
+        session,
+        *,
+        case_id,
+        event_kind: str,
+        from_actor_id,
+        to_actor_id,
+        triggered_by_actor_id,
+    ) -> None:
+        next_seq = (
+            await session.execute(
+                text(
+                    "select coalesce(max(event_seq), 0) + 1 as next_seq from ops.quote_case_assignment_events where quote_case_id=:case_id"
+                ),
+                {"case_id": case_id},
+            )
+        ).scalar_one()
+        await session.execute(
+            text(
+                """
+                insert into ops.quote_case_assignment_events(
+                    id, quote_case_id, event_seq, event_kind, from_manager_actor_id, to_manager_actor_id, triggered_by_actor_id, created_at, updated_at
+                ) values (
+                        :event_id, :case_id, :event_seq, :event_kind, :from_actor_id, :to_actor_id, :triggered_by_actor_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                )
+                """
+            ),
+            {
+                "event_id": str(uuid4()),
+                "case_id": case_id,
+                "event_seq": next_seq,
+                "event_kind": event_kind,
+                "from_actor_id": from_actor_id,
+                "to_actor_id": to_actor_id,
+                "triggered_by_actor_id": triggered_by_actor_id,
+            },
+        )
+
     async def get_detail(self, case_id, actor_id):
         async with self._sf() as session:
             head = (
@@ -560,7 +599,12 @@ class SqlCaseRepository:
                 await session.execute(
                     text(
                         """
-                        select direction, body_text as body, created_at, coalesce(delivery_status, 'not_applicable') as delivery_status
+                        select
+                            direction,
+                            body_text as body,
+                            created_at,
+                            coalesce(delivery_status, 'not_applicable') as delivery_status,
+                            author_role
                         from ops.quote_case_thread_entries
                         where quote_case_id=:case_id
                         order by created_at desc
@@ -623,7 +667,16 @@ class SqlCaseRepository:
                 telegram_user_id=int(head.customer_telegram_user_id) if head.customer_telegram_user_id is not None else None,
             ),
         )
-        detail.thread_entries = [ThreadEntry(**r._mapping) for r in reversed(thread_rows)]
+        detail.thread_entries = [
+            ThreadEntry(
+                direction=r.direction,
+                body=r.body,
+                created_at=_as_dt(r.created_at),
+                delivery_status=r.delivery_status,
+                author_side=r.author_role,
+            )
+            for r in reversed(thread_rows)
+        ]
         detail.internal_notes = [InternalNote(**r._mapping) for r in reversed(note_rows)]
         if delivery_row:
             detail.last_delivery = DeliverySnapshot(**delivery_row._mapping)
@@ -649,26 +702,86 @@ class SqlCaseRepository:
                 ),
                 {"case_id": case_id, "actor_id": actor_id},
             )
-            next_seq = (await session.execute(text("select coalesce(max(event_seq), 0) + 1 as next_seq from ops.quote_case_assignment_events where quote_case_id=:case_id"), {"case_id": case_id})).scalar_one()
-            await session.execute(
+            await self._append_assignment_event(
+                session,
+                case_id=case_id,
+                event_kind="claimed",
+                from_actor_id=current.assigned_manager_actor_id,
+                to_actor_id=actor_id,
+                triggered_by_actor_id=actor_id,
+            )
+            await session.commit()
+        return result.rowcount > 0
+
+    async def assign_case(self, case_id, actor_id, target_manager_actor_id) -> bool:
+        async with self._sf() as session:
+            current = (
+                await session.execute(
+                    text("select assigned_manager_actor_id from ops.quote_case_ops_states where quote_case_id=:case_id"),
+                    {"case_id": case_id},
+                )
+            ).first()
+            if not current:
+                return False
+            is_reassign = current.assigned_manager_actor_id is not None and current.assigned_manager_actor_id != target_manager_actor_id
+            result = await session.execute(
                 text(
                     """
-                    insert into ops.quote_case_assignment_events(
-                        id, quote_case_id, event_seq, event_kind, from_manager_actor_id, to_manager_actor_id, triggered_by_actor_id, created_at, updated_at
-                    ) values (
-                         :event_id, :case_id, :event_seq, :event_kind, :from_actor_id, :to_actor_id, :triggered_by_actor_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-                    )
+                    update ops.quote_case_ops_states
+                    set assigned_manager_actor_id=:target_actor_id,
+                        assigned_by_actor_id=:actor_id,
+                        assigned_at=CURRENT_TIMESTAMP,
+                        status='active',
+                        waiting_state='waiting_manager',
+                        updated_at=CURRENT_TIMESTAMP
+                    where quote_case_id=:case_id
                     """
                 ),
-                {
-                    "case_id": case_id,
-                    "event_seq": next_seq,
-                    "event_kind": "claimed",
-                    "from_actor_id": current.assigned_manager_actor_id,
-                    "to_actor_id": actor_id,
-                    "triggered_by_actor_id": actor_id,
-                    "event_id": str(uuid4()),
-                },
+                {"case_id": case_id, "target_actor_id": target_manager_actor_id, "actor_id": actor_id},
+            )
+            await self._append_assignment_event(
+                session,
+                case_id=case_id,
+                event_kind="reassigned" if is_reassign else "assigned",
+                from_actor_id=current.assigned_manager_actor_id,
+                to_actor_id=target_manager_actor_id,
+                triggered_by_actor_id=actor_id,
+            )
+            await session.commit()
+        return result.rowcount > 0
+
+    async def unassign_case(self, case_id, actor_id) -> bool:
+        async with self._sf() as session:
+            current = (
+                await session.execute(
+                    text("select assigned_manager_actor_id from ops.quote_case_ops_states where quote_case_id=:case_id"),
+                    {"case_id": case_id},
+                )
+            ).first()
+            if not current:
+                return False
+            result = await session.execute(
+                text(
+                    """
+                    update ops.quote_case_ops_states
+                    set assigned_manager_actor_id=null,
+                        assigned_by_actor_id=:actor_id,
+                        assigned_at=CURRENT_TIMESTAMP,
+                        status='new',
+                        waiting_state='none',
+                        updated_at=CURRENT_TIMESTAMP
+                    where quote_case_id=:case_id
+                    """
+                ),
+                {"case_id": case_id, "actor_id": actor_id},
+            )
+            await self._append_assignment_event(
+                session,
+                case_id=case_id,
+                event_kind="unassigned",
+                from_actor_id=current.assigned_manager_actor_id,
+                to_actor_id=None,
+                triggered_by_actor_id=actor_id,
             )
             await session.commit()
         return result.rowcount > 0
@@ -696,25 +809,13 @@ class SqlCaseRepository:
                 ),
                 {"case_id": case_id, "owner_actor_id": owner_row.actor_id, "actor_id": actor_id},
             )
-            next_seq = (await session.execute(text("select coalesce(max(event_seq), 0) + 1 as next_seq from ops.quote_case_assignment_events where quote_case_id=:case_id"), {"case_id": case_id})).scalar_one()
-            await session.execute(
-                text(
-                    """
-                    insert into ops.quote_case_assignment_events(
-                        id, quote_case_id, event_seq, event_kind, from_manager_actor_id, to_manager_actor_id, triggered_by_actor_id, created_at, updated_at
-                    ) values (
-                        :id, :case_id, :event_seq, 'escalated_to_owner', :from_actor_id, :to_actor_id, :triggered_by_actor_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-                    )
-                    """
-                ),
-                {
-                    "id": str(uuid4()),
-                    "case_id": case_id,
-                    "event_seq": next_seq,
-                    "from_actor_id": current.assigned_manager_actor_id,
-                    "to_actor_id": owner_row.actor_id,
-                    "triggered_by_actor_id": actor_id,
-                },
+            await self._append_assignment_event(
+                session,
+                case_id=case_id,
+                event_kind="escalated_to_owner",
+                from_actor_id=current.assigned_manager_actor_id,
+                to_actor_id=owner_row.actor_id,
+                triggered_by_actor_id=actor_id,
             )
             await session.commit()
         return result.rowcount > 0

@@ -77,6 +77,15 @@ class ManagerSurfaceService:
     async def claim_case(self, actor: ManagerActor, case_id) -> bool:
         return await self._case_repo.claim_case(case_id, actor.actor_id)
 
+    async def assign_case(self, actor: ManagerActor, case_id, target_manager_actor_id) -> bool:
+        return await self._case_repo.assign_case(case_id, actor.actor_id, target_manager_actor_id)
+
+    async def reassign_case(self, actor: ManagerActor, case_id, target_manager_actor_id) -> bool:
+        return await self.assign_case(actor, case_id, target_manager_actor_id)
+
+    async def unassign_case(self, actor: ManagerActor, case_id) -> bool:
+        return await self._case_repo.unassign_case(case_id, actor.actor_id)
+
     async def escalate_to_owner(self, actor: ManagerActor, case_id) -> bool:
         return await self._case_repo.escalate_to_owner(case_id, actor.actor_id)
 

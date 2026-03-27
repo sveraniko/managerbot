@@ -91,6 +91,7 @@ class ThreadEntry:
     body: str
     created_at: datetime
     delivery_status: str = "not_applicable"
+    author_side: str | None = None
 
 
 @dataclass(slots=True)
