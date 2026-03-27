@@ -37,7 +37,7 @@ def test_contact_panel_and_search_identity_are_consistent() -> None:
         operational_status="active",
         waiting_state="waiting_manager",
         priority="vip",
-        escalation_level=1,
+        escalation_level="manager_attention",
         assignment_label="Assigned to me",
         linked_quote_display_number=501,
         customer_label="ACME",
@@ -60,7 +60,7 @@ def test_contact_panel_and_search_identity_are_consistent() -> None:
                 operational_status="active",
                 waiting_state="waiting_manager",
                 priority="vip",
-                escalation_level=1,
+                escalation_level="manager_attention",
                 is_archived=False,
             )
         ],

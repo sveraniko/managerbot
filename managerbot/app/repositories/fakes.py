@@ -5,6 +5,7 @@ from uuid import UUID
 from uuid import uuid4
 
 from app.models import CaseDetail, HotTaskBucket, HotTaskBucketKey, HotTaskItem, ManagerActor, NotificationEvent, PresenceStatus, QueueFilters, QueueItem, SearchResultItem, ThreadEntry
+from app.services.escalation import ESCALATION_OWNER_ATTENTION, escalation_rank, is_escalated, normalize_escalation_level
 from app.services.priority import is_high_or_higher_priority, is_top_tier_priority, priority_rank
 
 
@@ -65,7 +66,7 @@ class FakeQueueRepository:
                     customer_label=item.customer_label,
                     reason=f"{title.lower()} signal",
                     priority=item.priority,
-                    escalation_level=item.escalation_level,
+                    escalation_level=normalize_escalation_level(item.escalation_level),
                     waiting_state=item.waiting_state,
                     sla_due_at=item.sla_due_at,
                     last_customer_message_at=item.last_customer_message_at,
@@ -94,7 +95,7 @@ class FakeQueueRepository:
                         operational_status=item.operational_status,
                         waiting_state=item.waiting_state,
                         priority=item.priority,
-                        escalation_level=item.escalation_level,
+                        escalation_level=normalize_escalation_level(item.escalation_level),
                         is_archived=item.is_archived,
                     )
                 )
@@ -104,7 +105,7 @@ class FakeQueueRepository:
             key=lambda i: (
                 0 if not i.is_archived else 1,
                 priority_rank(i.priority),
-                -int(i.escalation_level),
+                -escalation_rank(i.escalation_level),
                 i.case_display_number,
                 i.case_id.hex,
             ),
@@ -152,7 +153,7 @@ class FakeCaseRepository:
         detail = self.details.get(case_id)
         if not detail:
             return False
-        detail.escalation_level = 1
+        detail.escalation_level = ESCALATION_OWNER_ATTENTION
         if detail.priority not in ("urgent", "vip"):
             detail.priority = "high"
         detail.waiting_state = "waiting_owner"
@@ -219,7 +220,7 @@ def _apply_filters(items: list[QueueItem], actor_id: UUID, filters: QueueFilters
     elif filters.priority_scope == "vip":
         filtered = [i for i in filtered if i.priority == "vip"]
     if filters.escalation_scope == "escalated":
-        filtered = [i for i in filtered if i.escalation_level > 0]
+        filtered = [i for i in filtered if is_escalated(i.escalation_level)]
     if filters.lifecycle_scope == "active":
         filtered = [i for i in filtered if not i.is_archived]
     elif filters.lifecycle_scope == "archive":

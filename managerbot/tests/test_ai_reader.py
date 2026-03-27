@@ -42,7 +42,7 @@ def _sample_case() -> CaseDetail:
         operational_status="active",
         waiting_state="waiting_manager",
         priority="high",
-        escalation_level=1,
+        escalation_level="manager_attention",
         assignment_label="Manager One",
         linked_quote_display_number=7001,
         linked_order_display_number=9001,

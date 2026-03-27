@@ -56,7 +56,7 @@ class QueueItem:
     waiting_state: str
     assigned_manager_actor_id: UUID | None
     priority: str
-    escalation_level: int
+    escalation_level: str
     last_customer_message_at: datetime | None
     sla_due_at: datetime | None = None
     is_archived: bool = False
@@ -69,7 +69,7 @@ class HotTaskItem:
     customer_label: str | None
     reason: str
     priority: str
-    escalation_level: int
+    escalation_level: str
     waiting_state: str
     sla_due_at: datetime | None
     last_customer_message_at: datetime | None
@@ -137,7 +137,7 @@ class CaseDetail:
     operational_status: str
     waiting_state: str
     priority: str
-    escalation_level: int
+    escalation_level: str
     assignment_label: str
     sla_due_at: datetime | None = None
     linked_order_display_number: int | None = None
@@ -172,7 +172,7 @@ class SearchResultItem:
     operational_status: str
     waiting_state: str
     priority: str
-    escalation_level: int
+    escalation_level: str
     is_archived: bool
     customer_actor_id: str | None = None
     customer_telegram_chat_id: int | None = None

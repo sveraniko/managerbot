@@ -25,7 +25,7 @@ class AIReaderPacket(BaseModel):
     operational_status: str
     waiting_state: str
     priority: str
-    escalation_level: int
+    escalation_level: str
     assignment_label: str
     linked_quote_display_number: int | None = None
     linked_order_display_number: int | None = None

@@ -38,7 +38,7 @@ def test_empty_queue_and_contact_panel_rendering_are_honest() -> None:
         operational_status="active",
         waiting_state="waiting_manager",
         priority="normal",
-        escalation_level=0,
+        escalation_level="none",
         assignment_label="Assigned to me",
         linked_quote_display_number=1200,
         customer_label="Acme",
@@ -57,7 +57,7 @@ def test_queue_keyboard_shows_load_more_when_page_can_continue() -> None:
             waiting_state="waiting_manager",
             assigned_manager_actor_id=None,
             priority="normal",
-            escalation_level=0,
+            escalation_level="none",
             last_customer_message_at=None,
         )
     ]

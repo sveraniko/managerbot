@@ -19,7 +19,7 @@ def _item(display: int) -> HotTaskItem:
         customer_label="ACME",
         reason="reason",
         priority="high",
-        escalation_level=0,
+        escalation_level="none",
         waiting_state="waiting_manager",
         sla_due_at=now,
         last_customer_message_at=now,
@@ -77,7 +77,7 @@ def test_sql_hot_task_bucket_membership_and_ordering() -> None:
             )
             await session.execute(
                 text(
-                    "update ops.quote_case_ops_states set waiting_state='waiting_manager', assigned_manager_actor_id='m1', priority='urgent', escalation_level=1, sla_due_at=:overdue, last_customer_message_at=:fresh where quote_case_id='c3'"
+                    "update ops.quote_case_ops_states set waiting_state='waiting_manager', assigned_manager_actor_id='m1', priority='urgent', escalation_level='manager_attention', sla_due_at=:overdue, last_customer_message_at=:fresh where quote_case_id='c3'"
                 ),
                 {"overdue": overdue, "fresh": fresh},
             )
