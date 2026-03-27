@@ -12,18 +12,9 @@ def hub_keyboard(buckets: list[HotTaskBucket]) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="Archive / history", callback_data=MBCallback(action="queue", value="archive").pack())],
     ]
     for bucket in buckets:
-        for item in bucket.items:
-            rows.append(
-                [
-                    InlineKeyboardButton(
-                        text=f"{_bucket_short(bucket.title)} · Case #{item.case_display_number}",
-                        callback_data=MBCallback(action="case", value=str(item.case_id)).pack(),
-                    )
-                ]
-            )
         if bucket.items:
             rows.append(
-                [InlineKeyboardButton(text=f"Open {bucket.title}", callback_data=MBCallback(action="queue", value=bucket.queue_key).pack())]
+                [InlineKeyboardButton(text=f"Open {bucket.title} ({len(bucket.items)})", callback_data=MBCallback(action="queue", value=bucket.queue_key).pack())]
             )
     rows.extend(
         [
