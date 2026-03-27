@@ -64,7 +64,7 @@ async def _make_session_factory() -> async_sessionmaker:
                     assigned_manager_actor_id text,
                     assigned_by_actor_id text,
                     assigned_at text,
-                    escalation_level integer not null,
+                    escalation_level text not null,
                     sla_due_at text,
                     last_customer_message_at text,
                     last_manager_message_at text,
@@ -176,10 +176,10 @@ async def _make_session_factory() -> async_sessionmaker:
                     assigned_manager_actor_id, assigned_by_actor_id, assigned_at,
                     escalation_level, sla_due_at, last_customer_message_at, updated_at
                 ) values
-                ('s1', 'c1', 'new', 'none', 'high', null, null, null, 0, null, :now, :now),
-                ('s2', 'c2', 'active', 'waiting_manager', 'urgent', 'm1', 'm1', :now, 0, :now, :now, :now),
-                ('s3', 'c3', 'active', 'waiting_customer', 'normal', 'm1', 'm1', :now, 1, null, :now, :now),
-                ('s4', 'c4', 'closed', 'waiting_customer', 'normal', 'm1', 'm1', :now, 0, null, :now, :now)
+                ('s1', 'c1', 'new', 'none', 'high', null, null, null, 'none', null, :now, :now),
+                ('s2', 'c2', 'active', 'waiting_manager', 'urgent', 'm1', 'm1', :now, 'none', :now, :now, :now),
+                ('s3', 'c3', 'active', 'waiting_customer', 'normal', 'm1', 'm1', :now, 'manager_attention', null, :now, :now),
+                ('s4', 'c4', 'closed', 'waiting_customer', 'normal', 'm1', 'm1', :now, 'none', null, :now, :now)
                 """
             ),
             {"now": now},
@@ -370,7 +370,7 @@ def test_escalate_to_owner_updates_state_and_assignment_event() -> None:
             state = (await session.execute(text("select assigned_manager_actor_id, waiting_state, escalation_level from ops.quote_case_ops_states where quote_case_id='c1'"))).first()
             assert state.assigned_manager_actor_id == "owner"
             assert state.waiting_state == "waiting_owner"
-            assert state.escalation_level == 1
+            assert state.escalation_level == "owner_attention"
 
             event = (await session.execute(text("select event_kind, to_manager_actor_id from ops.quote_case_assignment_events where quote_case_id='c1' order by event_seq desc limit 1"))).first()
             assert event.event_kind == "escalated_to_owner"

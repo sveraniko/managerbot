@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from app.models import CaseDetail, CustomerCard, HotTaskBucket, HotTaskItem, ManagerActor, PresenceStatus, QueueFilters, QueueItem, SearchResultItem
+from app.services.escalation import is_escalated, normalize_escalation_level
 from app.services.ai_reader import AIReaderAnalysis
 from app.services.ai_recommender import AIRecommendation
 from app.services.ai_state import AISnapshotMeta
@@ -225,8 +226,8 @@ def _render_hot_task_item(item: HotTaskItem) -> str:
     order_suffix = f" · O#{item.linked_order_display_number}" if item.linked_order_display_number else ""
     customer = item.customer_label or "-"
     cues = [f"p:{item.priority}"]
-    if item.escalation_level > 0:
-        cues.append(f"esc:{item.escalation_level}")
+    if is_escalated(item.escalation_level):
+        cues.append(f"esc:{normalize_escalation_level(item.escalation_level)}")
     if item.sla_due_at:
         cues.append(f"sla:{_age_hint(item.sla_due_at)}")
     if item.last_event_at:

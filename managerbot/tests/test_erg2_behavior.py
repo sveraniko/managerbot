@@ -38,7 +38,7 @@ def test_search_results_render_no_results_and_rows() -> None:
                 operational_status="active",
                 waiting_state="waiting_manager",
                 priority="vip",
-                escalation_level=1,
+                escalation_level="manager_attention",
                 is_archived=False,
             )
         ],
@@ -62,7 +62,7 @@ def test_queue_render_shows_filter_state_and_archive_marker() -> None:
                 waiting_state="waiting_customer",
                 assigned_manager_actor_id=None,
                 priority="normal",
-                escalation_level=0,
+                escalation_level="none",
                 last_customer_message_at=datetime.now(timezone.utc),
                 is_archived=True,
             )
