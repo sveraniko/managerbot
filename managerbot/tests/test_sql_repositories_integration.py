@@ -396,6 +396,50 @@ def test_escalate_to_owner_preserves_vip_priority() -> None:
     asyncio.run(run())
 
 
+def test_assign_reassign_and_unassign_persist_assignment_events() -> None:
+    async def run() -> None:
+        sf = await _make_session_factory()
+        cases = SqlCaseRepository(sf)
+
+        assigned = await cases.assign_case("c1", "owner", "m1")
+        assert assigned is True
+        reassigned = await cases.assign_case("c1", "owner", "m2")
+        assert reassigned is True
+        unassigned = await cases.unassign_case("c1", "owner")
+        assert unassigned is True
+
+        async with sf() as session:
+            state = (
+                await session.execute(
+                    text(
+                        "select assigned_manager_actor_id, status, waiting_state from ops.quote_case_ops_states where quote_case_id='c1'"
+                    )
+                )
+            ).first()
+            assert state.assigned_manager_actor_id is None
+            assert state.status == "new"
+            assert state.waiting_state == "none"
+
+            events = (
+                await session.execute(
+                    text(
+                        """
+                        select event_seq, event_kind, from_manager_actor_id, to_manager_actor_id
+                        from ops.quote_case_assignment_events
+                        where quote_case_id='c1'
+                        order by event_seq asc
+                        """
+                    )
+                )
+            ).all()
+            assert [e.event_kind for e in events] == ["assigned", "reassigned", "unassigned"]
+            assert events[0].from_manager_actor_id is None and events[0].to_manager_actor_id == "m1"
+            assert events[1].from_manager_actor_id == "m1" and events[1].to_manager_actor_id == "m2"
+            assert events[2].from_manager_actor_id == "m2" and events[2].to_manager_actor_id is None
+
+    asyncio.run(run())
+
+
 def test_internal_note_persistence_and_case_detail_separation() -> None:
     async def run() -> None:
         sf = await _make_session_factory()

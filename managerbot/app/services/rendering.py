@@ -15,7 +15,7 @@ def render_hub(actor: ManagerActor, presence: PresenceStatus, counts: dict[str, 
     }.get(presence.value, presence.value)
 
     lines = [
-        "ManagerBot",
+        "ManagerBot Workdesk",
         f"{actor.display_name} · {actor.role.value}",
         f"Presence: {presence_label}",
         "",
@@ -40,12 +40,12 @@ def render_hub(actor: ManagerActor, presence: PresenceStatus, counts: dict[str, 
     lines.extend([
         "",
         "📋 Queue summary",
-        f"New/Unassigned:    {counts.get('new', 0)}",
-        f"Assigned to me:    {counts.get('mine', 0)}",
-        f"Waiting for me:    {counts.get('waiting_me', 0)}",
-        f"Waiting customer:  {counts.get('waiting_customer', 0)}",
-        f"Urgent:            {counts.get('urgent', 0)}",
-        f"Escalated:         {counts.get('escalated', 0)}",
+        f"New/Unassigned: {counts.get('new', 0)}",
+        f"Assigned to me: {counts.get('mine', 0)}",
+        f"Waiting for me: {counts.get('waiting_me', 0)}",
+        f"Waiting customer: {counts.get('waiting_customer', 0)}",
+        f"Urgent: {counts.get('urgent', 0)}",
+        f"Escalated: {counts.get('escalated', 0)}",
     ])
     return "\n".join(lines)
 
@@ -105,7 +105,8 @@ def render_case_detail(
     if detail.thread_entries:
         for entry in detail.thread_entries[-5:]:
             suffix = f" [{entry.delivery_status}]" if entry.direction == "outbound" else ""
-            head.append(f"- {entry.direction}: {_snippet(entry.body, 220)}{suffix}")
+            side = entry.author_side or entry.direction
+            head.append(f"- {side}: {_snippet(entry.body, 220)}{suffix}")
     else:
         head.append("- none")
     head.append("\nInternal notes:")
