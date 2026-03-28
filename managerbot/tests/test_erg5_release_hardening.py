@@ -63,3 +63,12 @@ def test_queue_keyboard_shows_load_more_when_page_can_continue() -> None:
     ]
     labels = _texts(queue_keyboard(items, has_more=True))
     assert "Load more" in labels
+
+
+def test_case_keyboard_copy_is_consistent_with_case_surface() -> None:
+    labels = _texts(case_keyboard(has_ai_recommendation=True, has_order_actions=True, has_contact_actions=True))
+    assert "Claim case" in labels
+    assert "Compose customer reply" in labels
+    assert "Compose internal note" in labels
+    assert "Adopt AI reply draft" in labels
+    assert "Order summary and handoff" in labels

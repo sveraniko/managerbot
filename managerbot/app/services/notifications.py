@@ -114,12 +114,12 @@ class ManagerNotificationService:
 
     def _render_event(self, event: NotificationEvent) -> str:
         if event.kind == "case_visible":
-            return f"New case visible: Case #{event.case_display_number}. Open queue: New/Unassigned."
+            return f"New case visible: Case #{event.case_display_number}. Open queue: New/Unassigned lane."
         if event.kind == "new_inbound":
             suffix = f" — {event.summary}" if event.summary else ""
             return f"New customer message on Case #{event.case_display_number}{suffix}"
         if event.kind == "assigned_to_me":
-            return f"Case #{event.case_display_number} is assigned to you."
+            return f"Case #{event.case_display_number} is assigned to you. Open Assigned to me lane."
         if event.kind == "delivery_failed":
             suffix = f" ({event.summary})" if event.summary else ""
             return f"Delivery failed for Case #{event.case_display_number}{suffix}. Reopen case and retry manually."

@@ -34,7 +34,7 @@ def queue_keyboard(items: list[QueueItem], *, has_more: bool = True) -> InlineKe
     rows = [[InlineKeyboardButton(text=f"Case #{item.case_display_number}", callback_data=MBCallback(action="case", value=str(item.case_id)).pack())] for item in items]
     if has_more:
         rows.append([InlineKeyboardButton(text="Load more", callback_data=MBCallback(action="load_more").pack())])
-    rows.append([InlineKeyboardButton(text="Search", callback_data=MBCallback(action="search_start").pack())])
+    rows.append([InlineKeyboardButton(text="Search case/order/customer", callback_data=MBCallback(action="search_start").pack())])
     rows.append([InlineKeyboardButton(text="Filters", callback_data=MBCallback(action="filters_open").pack())])
     rows.append([InlineKeyboardButton(text="Back", callback_data=MBCallback(action="back").pack()), InlineKeyboardButton(text="Home", callback_data=MBCallback(action="home").pack())])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -49,8 +49,8 @@ def case_keyboard(
 ) -> InlineKeyboardMarkup:
     ai_rows = []
     if has_ai_recommendation:
-        reply_label = "Use AI reply draft" if not ai_low_confidence else "Use AI reply draft ⚠"
-        note_label = "Use AI note draft" if not ai_low_confidence else "Use AI note draft ⚠"
+        reply_label = "Adopt AI reply draft" if not ai_low_confidence else "Adopt AI reply draft ⚠"
+        note_label = "Adopt AI note draft" if not ai_low_confidence else "Adopt AI note draft ⚠"
         ai_rows.extend(
             [
                 [InlineKeyboardButton(text=reply_label, callback_data=MBCallback(action="ai_use_reply_draft").pack())],
@@ -58,8 +58,8 @@ def case_keyboard(
             ]
         )
     rows = [
-            [InlineKeyboardButton(text="Claim / Take into work", callback_data=MBCallback(action="claim").pack())],
-            [InlineKeyboardButton(text="Escalate to owner", callback_data=MBCallback(action="escalate_owner").pack())],
+            [InlineKeyboardButton(text="Claim case", callback_data=MBCallback(action="claim").pack())],
+            [InlineKeyboardButton(text="Escalate case to owner", callback_data=MBCallback(action="escalate_owner").pack())],
             [
                 InlineKeyboardButton(text="Priority: normal", callback_data=MBCallback(action="set_priority", value="normal").pack()),
                 InlineKeyboardButton(text="Priority: high", callback_data=MBCallback(action="set_priority", value="high").pack()),
@@ -68,13 +68,13 @@ def case_keyboard(
                 InlineKeyboardButton(text="Priority: urgent", callback_data=MBCallback(action="set_priority", value="urgent").pack()),
                 InlineKeyboardButton(text="Priority: VIP", callback_data=MBCallback(action="set_priority", value="vip").pack()),
             ],
-            [InlineKeyboardButton(text="Reply to customer", callback_data=MBCallback(action="reply_start").pack())],
-            [InlineKeyboardButton(text="Add internal note", callback_data=MBCallback(action="note_start").pack())],
+            [InlineKeyboardButton(text="Compose customer reply", callback_data=MBCallback(action="reply_start").pack())],
+            [InlineKeyboardButton(text="Compose internal note", callback_data=MBCallback(action="note_start").pack())],
     ]
     if has_contact_actions:
         rows.append([InlineKeyboardButton(text="Contact actions", callback_data=MBCallback(action="contact_panel").pack())])
     if has_order_actions:
-        rows.append([InlineKeyboardButton(text="Order summary / handoff", callback_data=MBCallback(action="order_summary_open").pack())])
+        rows.append([InlineKeyboardButton(text="Order summary and handoff", callback_data=MBCallback(action="order_summary_open").pack())])
     rows.extend(
         [
             [InlineKeyboardButton(text="AI Analyze + Recommend / Refresh", callback_data=MBCallback(action="ai_analyze").pack())],
