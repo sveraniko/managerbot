@@ -18,7 +18,7 @@ from app.models import (
 from app.repositories.fakes import FakeCaseRepository, FakePresenceRepository, FakeQueueRepository
 from app.services.delivery import DeliveryResult
 from app.services.manager_surface import ManagerSurfaceService
-from app.services.rendering import render_case_detail, render_contact_actions_panel, render_hub, render_queue
+from app.services.rendering import render_case_detail, render_contact_actions_panel, render_hub, render_queue, render_reply_preview
 from app.state.manager_session import ManagerSessionState
 
 
@@ -31,6 +31,16 @@ class FakeDeliveryGateway:
         if self.ok:
             return DeliveryResult(ok=True, telegram_message_id=77)
         return DeliveryResult(ok=False, error_message="boom")
+
+
+class CaptureDeliveryGateway(FakeDeliveryGateway):
+    def __init__(self, ok: bool = True) -> None:
+        super().__init__(ok=ok)
+        self.sent: list[tuple[int, str]] = []
+
+    async def send_text(self, chat_id: int, text: str) -> DeliveryResult:
+        self.sent.append((chat_id, text))
+        return await super().send_text(chat_id, text)
 
 
 def test_queue_rendering_stable_numbers_and_order() -> None:
@@ -240,6 +250,98 @@ def test_item_detail_omits_missing_fields_without_placeholder_filler() -> None:
     assert "Increment" not in rendered
     assert "In box" not in rendered
     assert "Description: n/a" not in rendered.lower()
+
+
+def test_reply_preview_includes_customer_visible_text_and_commercial_constraints() -> None:
+    detail = CaseDetail(
+        case_id=uuid4(),
+        case_display_number=901,
+        commercial_status="open",
+        operational_status="active",
+        waiting_state="waiting_manager",
+        priority="normal",
+        escalation_level="none",
+        assignment_label="Assigned to me",
+        linked_quote_display_number=901,
+        item_detail=ManagerItemDetail(
+            selling_unit="display box",
+            min_order="2 display boxes",
+            increment="1 display box",
+            packaging_context="12 trays",
+            is_active=True,
+            in_draft=False,
+        ),
+    )
+    draft = "Available now. Min order is 2 display boxes, increment 1 display box."
+    rendered = render_reply_preview(detail, draft, guardrail_issues=[])
+    assert "Customer-visible message (exactly as sent):" in rendered
+    assert draft in rendered
+    assert "Commercial context check before send:" in rendered
+    assert "- Selling unit: display box" in rendered
+    assert "- Min order: 2 display boxes" in rendered
+    assert "- Increment: 1 display box" in rendered
+    assert "- In box: 12 trays" in rendered
+    assert "- Availability: active" in rendered
+    assert "- Draft quote: no" in rendered
+
+
+def test_reply_preview_omits_absent_commercial_lines() -> None:
+    detail = CaseDetail(
+        case_id=uuid4(),
+        case_display_number=902,
+        commercial_status="open",
+        operational_status="active",
+        waiting_state="waiting_manager",
+        priority="normal",
+        escalation_level="none",
+        assignment_label="Assigned to me",
+        linked_quote_display_number=902,
+        item_detail=ManagerItemDetail(title="Classic Nougat"),
+    )
+    rendered = render_reply_preview(detail, "Thanks, we will update shortly.")
+    assert "Customer-visible message (exactly as sent):" in rendered
+    assert "Commercial context check before send:" not in rendered
+
+
+def test_compose_guardrails_flag_legacy_internal_terms() -> None:
+    from app.services.compose import ComposeStateService
+
+    service = ComposeStateService()
+    issues = service.customer_visible_guardrail_issues("MOQ 3 boxes, step 1 box.")
+    assert "Min order" in " ".join(issues)
+    assert "Increment" in " ".join(issues)
+
+
+def test_reply_preview_message_matches_final_sent_message() -> None:
+    actor = ManagerActor(uuid4(), 1, "Manager", SystemRole.MANAGER)
+    case_id = uuid4()
+    detail = CaseDetail(
+        case_id=case_id,
+        case_display_number=903,
+        commercial_status="open",
+        operational_status="active",
+        waiting_state="waiting_manager",
+        priority="normal",
+        escalation_level="none",
+        assignment_label="Assigned to me",
+        linked_quote_display_number=903,
+        customer_card=CustomerCard(label="Acme", telegram_chat_id=42001),
+        item_detail=ManagerItemDetail(min_order="2 boxes", increment="1 box"),
+    )
+    gateway = CaptureDeliveryGateway(ok=True)
+    service = ManagerSurfaceService(
+        FakeQueueRepository({}),
+        FakeCaseRepository({case_id: detail}),
+        FakePresenceRepository(),
+        delivery_gateway=gateway,
+    )
+    draft = "Confirmed: Min order 2 boxes, increment 1 box."
+    preview = render_reply_preview(detail, draft)
+    notice = asyncio.run(service.send_reply(actor, case_id, draft))
+
+    assert draft in preview
+    assert gateway.sent and gateway.sent[0][1] == draft
+    assert "sent to customer" in notice.lower()
 
 
 def test_fake_case_repository_preserves_manager_item_contract() -> None:
