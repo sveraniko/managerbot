@@ -25,6 +25,24 @@ class RecommendedAction(str, Enum):
     REVIEW_DELIVERY_ISSUE = "review_delivery_issue"
 
 
+class AIHandoffState(str, Enum):
+    RESOLVED = "resolved"
+    AMBIGUOUS = "ambiguous"
+    ALTERNATIVES_AVAILABLE = "alternatives_available"
+    NOT_FOUND = "not_found"
+    NEEDS_HUMAN_REVIEW = "needs_human_review"
+
+
+class AIAlternativeSuggestion(BaseModel):
+    title: str = Field(min_length=1, max_length=180)
+    selling_unit: str | None = Field(default=None, max_length=80)
+    min_order: str | None = Field(default=None, max_length=80)
+    increment: str | None = Field(default=None, max_length=80)
+    packaging_context: str | None = Field(default=None, max_length=120)
+    availability: str | None = Field(default=None, max_length=80)
+    rationale: str | None = Field(default=None, max_length=220)
+
+
 class AIRecommendation(BaseModel):
     summary: str = Field(min_length=1, max_length=500)
     customer_intent: str = Field(min_length=1, max_length=300)
@@ -37,6 +55,10 @@ class AIRecommendation(BaseModel):
     clarification_questions: list[str] = Field(default_factory=list, max_length=5)
     escalation_recommendation: bool = False
     escalation_reason: str | None = Field(default=None, max_length=300)
+    handoff_state: AIHandoffState = AIHandoffState.NEEDS_HUMAN_REVIEW
+    handoff_rationale: str = Field(default="Needs manager review.", min_length=1, max_length=260)
+    resolved_item_title: str | None = Field(default=None, max_length=180)
+    alternatives: list[AIAlternativeSuggestion] = Field(default_factory=list, max_length=5)
     confidence: float
 
     @field_validator("confidence")
@@ -157,13 +179,22 @@ class AIRecommenderService:
         return f"recommender:{self._config.model}:{self._config.prompt_version}:{packet.case_id}:{digest}"
 
 
+def recommendation_supports_draft_adoption(recommendation: AIRecommendation) -> bool:
+    return recommendation.handoff_state in {
+        AIHandoffState.RESOLVED,
+        AIHandoffState.ALTERNATIVES_AVAILABLE,
+    }
+
+
 def _recommender_system_prompt(prompt_version: str) -> str:
     return (
         f"You are ManagerBot AI Recommender (prompt {prompt_version}). "
         "You are advisory-only and never execute actions. "
         "Use only the provided case packet facts and avoid invented events. "
-        "Provide concise manager-ready recommendations, reply and internal note drafts, "
-        "and escalation suggestions only when justified by packet risk. "
+        "Provide concise manager-ready recommendations, explicit AI-to-manager handoff status, "
+        "resolved item identity or alternatives where relevant, and escalation suggestions only when justified by packet risk. "
+        "When commercial constraints are present, use customer-readable terms: Selling unit, Min order, Increment, packaging context. "
+        "Never use internal shorthand like MOQ/step in customer-visible draft text. "
         "Use clarification questions only when genuinely needed. "
         "Avoid certainty beyond available facts and return strict JSON matching schema."
     )
@@ -173,6 +204,7 @@ def _recommender_user_prompt(packet: AIReaderPacket) -> str:
     return (
         "Generate controlled recommendations for this case packet. "
         "Return practical next step, a constrained action enum, concise reply draft, concise internal note draft, "
-        "clarification questions when needed, and escalation rationale only when escalation is recommended.\n\n"
+        "clarification questions when needed, and escalation rationale only when escalation is recommended. "
+        "Set handoff_state to one of: resolved, ambiguous, alternatives_available, not_found, needs_human_review.\n\n"
         f"CASE_PACKET_JSON:\n{packet.model_dump_json(indent=2)}"
     )
