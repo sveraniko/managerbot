@@ -9,6 +9,7 @@ from app.models import (
     HotTaskBucketKey,
     HotTaskItem,
     ManagerActor,
+    ManagerItemDetail,
     PresenceStatus,
     QueueItem,
     SystemRole,
@@ -68,6 +69,22 @@ def test_case_detail_render_read_only_and_claim_updates() -> None:
         assignment_label="Unassigned",
         linked_order_display_number=88,
         linked_quote_display_number=777,
+        item_detail=ManagerItemDetail(
+            title="Almond Dragee",
+            brand="SweetCo",
+            sku_code="SW-001",
+            selling_unit="box",
+            min_order="2 boxes",
+            increment="1 box",
+            packaging_context="24 pcs",
+            shelf_life="9 months",
+            origin="Italy",
+            weight="2.4 kg",
+            piece_weight="100 g",
+            description="Crunchy almond dragee with cocoa coating.",
+            is_active=True,
+            in_draft=False,
+        ),
         thread_entries=[ThreadEntry("customer", "Need update", datetime.now(timezone.utc))],
         customer_card=CustomerCard(label="Acme", actor_id="cust-1", telegram_chat_id=40001, telegram_user_id=40001),
     )
@@ -89,6 +106,15 @@ def test_case_detail_render_read_only_and_claim_updates() -> None:
     assert "Telegram chat ID: 40001" in before
     assert "Direct contact policy" in before
     assert "SLA: healthy" in before
+    assert "Item detail:" in before
+    assert "- Selling unit: box" in before
+    assert "- Min order: 2 boxes" in before
+    assert "- Increment: 1 box" in before
+    assert "- In box: 24 pcs" in before
+    assert "- Shelf life: 9 months" in before
+    assert "- Origin: Italy" in before
+    assert "- Weight: 2.4 kg" in before
+    assert "- Piece weight: 100 g" in before
 
     claimed = asyncio.run(service.claim_case(actor, case_id))
     assert claimed
@@ -192,3 +218,62 @@ def test_workdesk_rendering_shows_hot_tasks_and_queue_summary() -> None:
     assert "#300" in rendered
     assert "Queue summary" in rendered
     assert "New/Unassigned: 2" in rendered
+
+
+def test_item_detail_omits_missing_fields_without_placeholder_filler() -> None:
+    detail = CaseDetail(
+        case_id=uuid4(),
+        case_display_number=779,
+        commercial_status="open",
+        operational_status="active",
+        waiting_state="waiting_manager",
+        priority="normal",
+        escalation_level="none",
+        assignment_label="Assigned to me",
+        linked_quote_display_number=779,
+        item_detail=ManagerItemDetail(title="Hazelnut Cream", min_order="1 box"),
+    )
+    rendered = render_case_detail(detail)
+    assert "Item detail:" in rendered
+    assert "- Item: Hazelnut Cream" in rendered
+    assert "- Min order: 1 box" in rendered
+    assert "Increment" not in rendered
+    assert "In box" not in rendered
+    assert "Description: n/a" not in rendered.lower()
+
+
+def test_fake_case_repository_preserves_manager_item_contract() -> None:
+    actor = ManagerActor(uuid4(), 1, "Manager", SystemRole.MANAGER)
+    case_id = uuid4()
+    detail = CaseDetail(
+        case_id=case_id,
+        case_display_number=810,
+        commercial_status="open",
+        operational_status="active",
+        waiting_state="waiting_manager",
+        priority="high",
+        escalation_level="none",
+        assignment_label="Assigned to me",
+        linked_quote_display_number=810,
+        item_detail=ManagerItemDetail(
+            title="Truffle Mix",
+            selling_unit="pack",
+            min_order="3 packs",
+            increment="1 pack",
+            packaging_context="12 pcs",
+        ),
+    )
+    service = ManagerSurfaceService(
+        FakeQueueRepository({}),
+        FakeCaseRepository({case_id: detail}),
+        FakePresenceRepository(),
+        delivery_gateway=FakeDeliveryGateway(),
+    )
+
+    loaded = asyncio.run(service.case_detail(actor, case_id))
+    assert loaded is not None
+    assert loaded.item_detail is not None
+    assert loaded.item_detail.selling_unit == "pack"
+    assert loaded.item_detail.min_order == "3 packs"
+    assert loaded.item_detail.increment == "1 pack"
+    assert loaded.item_detail.packaging_context == "12 pcs"

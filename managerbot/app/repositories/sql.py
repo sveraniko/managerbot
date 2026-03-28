@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.models import (
     CaseDetail,
@@ -15,6 +16,7 @@ from app.models import (
     HotTaskItem,
     InternalNote,
     ManagerActor,
+    ManagerItemDetail,
     NotificationEvent,
     PresenceStatus,
     QueueFilters,
@@ -533,6 +535,112 @@ def _as_dt(value):
     return datetime.fromisoformat(str(value))
 
 
+_MANAGER_ITEM_SOURCE_COLUMNS = {
+    "title",
+    "display_title",
+    "item_title",
+    "product_title",
+    "name",
+    "brand",
+    "sku_code",
+    "sku",
+    "code",
+    "selling_unit",
+    "unit",
+    "min_order",
+    "minimum_order_qty",
+    "moq",
+    "increment",
+    "order_increment",
+    "step",
+    "packaging_context",
+    "in_box",
+    "units_per_box",
+    "box_quantity",
+    "shelf_life",
+    "country_of_origin",
+    "origin",
+    "weight",
+    "piece_weight",
+    "description",
+    "is_active",
+    "active",
+    "in_draft",
+    "is_draft",
+}
+
+
+def _first_non_empty(payload: dict, candidates: tuple[str, ...]) -> str | None:
+    for key in candidates:
+        value = payload.get(key)
+        if value is None:
+            continue
+        text_value = str(value).strip()
+        if text_value:
+            return text_value
+    return None
+
+
+def _first_bool(payload: dict, candidates: tuple[str, ...]) -> bool | None:
+    for key in candidates:
+        if key not in payload:
+            continue
+        value = payload.get(key)
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return None
+        normalized = str(value).strip().lower()
+        if normalized in {"true", "t", "1", "yes", "y"}:
+            return True
+        if normalized in {"false", "f", "0", "no", "n"}:
+            return False
+    return None
+
+
+def _build_manager_item_detail(payload: dict) -> ManagerItemDetail | None:
+    packaging_context = _first_non_empty(payload, ("packaging_context",))
+    in_box = _first_non_empty(payload, ("in_box", "units_per_box", "box_quantity"))
+    if not packaging_context and in_box:
+        packaging_context = in_box
+    detail = ManagerItemDetail(
+        title=_first_non_empty(payload, ("display_title", "title", "item_title", "product_title", "name")),
+        brand=_first_non_empty(payload, ("brand",)),
+        sku_code=_first_non_empty(payload, ("sku_code", "sku", "code")),
+        selling_unit=_first_non_empty(payload, ("selling_unit", "unit")),
+        min_order=_first_non_empty(payload, ("min_order", "minimum_order_qty", "moq")),
+        increment=_first_non_empty(payload, ("increment", "order_increment", "step")),
+        packaging_context=packaging_context,
+        shelf_life=_first_non_empty(payload, ("shelf_life",)),
+        origin=_first_non_empty(payload, ("country_of_origin", "origin")),
+        weight=_first_non_empty(payload, ("weight",)),
+        piece_weight=_first_non_empty(payload, ("piece_weight",)),
+        description=_first_non_empty(payload, ("description",)),
+        is_active=_first_bool(payload, ("is_active", "active")),
+        in_draft=_first_bool(payload, ("in_draft", "is_draft")),
+    )
+    if not any(
+        (
+            detail.title,
+            detail.brand,
+            detail.sku_code,
+            detail.selling_unit,
+            detail.min_order,
+            detail.increment,
+            detail.packaging_context,
+            detail.shelf_life,
+            detail.origin,
+            detail.weight,
+            detail.piece_weight,
+            detail.description,
+            detail.is_active is not None,
+            detail.in_draft is not None,
+        )
+    ):
+        return None
+    return detail
+
+
 class SqlCaseRepository:
     def __init__(self, session_factory: async_sessionmaker) -> None:
         self._sf = session_factory
@@ -653,6 +761,7 @@ class SqlCaseRepository:
                     {"case_id": case_id},
                 )
             ).first()
+            item_detail = await self._load_item_detail(session, case_id)
         detail = CaseDetail(
             case_id=head.case_id,
             case_display_number=head.case_display_number,
@@ -676,6 +785,7 @@ class SqlCaseRepository:
                 telegram_chat_id=int(head.customer_telegram_chat_id) if head.customer_telegram_chat_id is not None else None,
                 telegram_user_id=int(head.customer_telegram_user_id) if head.customer_telegram_user_id is not None else None,
             ),
+            item_detail=item_detail,
         )
         detail.thread_entries = [
             ThreadEntry(
@@ -691,6 +801,60 @@ class SqlCaseRepository:
         if delivery_row:
             detail.last_delivery = DeliverySnapshot(**delivery_row._mapping)
         return detail
+
+    async def _load_item_detail(self, session, case_id) -> ManagerItemDetail | None:
+        from_items = await self._load_item_detail_from_table(session, "core", "quote_case_items", "quote_case_id", case_id)
+        if from_items:
+            return from_items
+        return await self._load_item_detail_from_table(session, "core", "quote_cases", "id", case_id)
+
+    async def _load_item_detail_from_table(self, session, schema: str, table: str, key_column: str, key_value) -> ManagerItemDetail | None:
+        columns = await self._table_columns(session, schema, table)
+        if not columns:
+            return None
+        if key_column not in columns:
+            return None
+        projection = sorted(columns.intersection(_MANAGER_ITEM_SOURCE_COLUMNS))
+        if not projection:
+            return None
+        select_sql = ", ".join(projection)
+        try:
+            row = (
+                await session.execute(
+                    text(f"select {select_sql} from {schema}.{table} where {key_column}=:key_value limit 1"),
+                    {"key_value": key_value},
+                )
+            ).first()
+        except SQLAlchemyError:
+            return None
+        if not row:
+            return None
+        payload = dict(row._mapping)
+        return _build_manager_item_detail(payload)
+
+    async def _table_columns(self, session, schema: str, table: str) -> set[str]:
+        try:
+            rows = (await session.execute(text(f"PRAGMA {schema}.table_info('{table}')"))).all()
+            if rows:
+                return {str(r.name) for r in rows}
+        except SQLAlchemyError:
+            pass
+        try:
+            rows = (
+                await session.execute(
+                    text(
+                        """
+                        select column_name
+                        from information_schema.columns
+                        where table_schema = :schema and table_name = :table
+                        """
+                    ),
+                    {"schema": schema, "table": table},
+                )
+            ).all()
+            return {str(r.column_name) for r in rows}
+        except SQLAlchemyError:
+            return set()
 
     async def claim_case(self, case_id, actor_id):
         async with self._sf() as session:
