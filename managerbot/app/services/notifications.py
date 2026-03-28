@@ -94,7 +94,7 @@ class ManagerNotificationService:
         assigned = recipients_by_actor.get(str(event.assigned_manager_actor_id)) if event.assigned_manager_actor_id else None
         assigned_presence = PresenceStatus(assigned[3]) if assigned else PresenceStatus.OFFLINE
 
-        if event.kind == "case_visible":
+        if event.kind in {"case_visible", "case_visible_batch"}:
             targets.update(owner_ids)
             targets.update(r[1] for r in recipients_by_actor.values() if r[2] == "MANAGER" and r[3] == PresenceStatus.ONLINE.value)
         elif event.kind == "new_inbound":
@@ -114,7 +114,11 @@ class ManagerNotificationService:
 
     def _render_event(self, event: NotificationEvent) -> str:
         if event.kind == "case_visible":
-            return f"New case visible: Case #{event.case_display_number}. Open queue: New/Unassigned lane."
+            return f"New incoming case visible: Case #{event.case_display_number}. Open queue: New incoming lane."
+        if event.kind == "case_visible_batch":
+            if event.summary:
+                return f"{event.summary} Open queue: New incoming lane."
+            return "New incoming cases are visible. Open queue: New incoming lane."
         if event.kind == "new_inbound":
             suffix = f" — {event.summary}" if event.summary else ""
             return f"New customer message on Case #{event.case_display_number}{suffix}"

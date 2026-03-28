@@ -56,11 +56,12 @@ def test_sla_classification_states() -> None:
 
 def test_notification_dedupe_new_case_once() -> None:
     event = NotificationEvent(
-        event_key="case_visible:c1:1",
-        kind="case_visible",
+        event_key="case_visible_batch:stamp:1:c1",
+        kind="case_visible_batch",
         case_id=uuid4(),
         case_display_number=101,
         assigned_manager_actor_id=None,
+        summary="1 new incoming case: #101",
     )
     recipients = FakeRecipients([
         ("owner", 1, "OWNER", PresenceStatus.ONLINE.value),
@@ -76,11 +77,12 @@ def test_notification_dedupe_new_case_once() -> None:
 
 def test_case_visible_does_not_target_manager_without_presence_row() -> None:
     event = NotificationEvent(
-        event_key="case_visible:c2:1",
-        kind="case_visible",
+        event_key="case_visible_batch:stamp:2:c2",
+        kind="case_visible_batch",
         case_id=uuid4(),
         case_display_number=102,
         assigned_manager_actor_id=None,
+        summary="2 new incoming cases. Earliest: #102",
     )
     recipients = FakeRecipients([
         ("owner", 1, "OWNER", PresenceStatus.ONLINE.value),
@@ -91,6 +93,31 @@ def test_case_visible_does_not_target_manager_without_presence_row() -> None:
 
     asyncio.run(service.run_once())
     assert {uid for uid, _ in sink.sent} == {1}
+
+
+def test_case_visible_batch_sends_single_batched_message() -> None:
+    events = [
+        NotificationEvent(
+            event_key="case_visible_batch:stamp:3:c1",
+            kind="case_visible_batch",
+            case_id=uuid4(),
+            case_display_number=101,
+            assigned_manager_actor_id=None,
+            summary="3 new incoming cases. Earliest: #101",
+        )
+    ]
+    recipients = FakeRecipients(
+        [
+            ("owner", 1, "OWNER", PresenceStatus.ONLINE.value),
+            ("m1", 2, "MANAGER", PresenceStatus.ONLINE.value),
+        ]
+    )
+    sink = FakeSink()
+    service = ManagerNotificationService(FakeEventsRepo(events), recipients, sink, FakeDedupe(), NotificationPolicy())
+
+    asyncio.run(service.run_once())
+    assert len(sink.sent) == 2
+    assert all("new incoming cases" in text.lower() for _, text in sink.sent)
 
 def test_new_inbound_busy_manager_falls_back_to_owner() -> None:
     assigned_actor_id = str(uuid4())

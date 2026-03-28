@@ -215,7 +215,7 @@ def test_workdesk_rendering_shows_hot_tasks_and_queue_summary() -> None:
     )
     buckets = [
         hot,
-        HotTaskBucket(HotTaskBucketKey.NEW_BUSINESS, "New business", "new", []),
+        HotTaskBucket(HotTaskBucketKey.NEW_BUSINESS, "New incoming", "new_incoming", []),
         HotTaskBucket(HotTaskBucketKey.SLA_AT_RISK, "SLA at risk", "sla_risk", []),
         HotTaskBucket(HotTaskBucketKey.URGENT_ESCALATED, "Urgent / VIP / escalated", "urgent_escalated", []),
         HotTaskBucket(HotTaskBucketKey.FAILED_DELIVERY, "Failed delivery", "failed_delivery", []),
@@ -223,7 +223,17 @@ def test_workdesk_rendering_shows_hot_tasks_and_queue_summary() -> None:
     rendered = render_hub(
         actor,
         presence=PresenceStatus.ONLINE,
-        counts={"new": 2, "mine": 3, "waiting_me": 1, "waiting_customer": 0, "urgent": 1, "escalated": 1, "sla_near": 0, "sla_overdue": 1},
+        counts={
+            "new": 2,
+            "new_incoming": 0,
+            "mine": 3,
+            "waiting_me": 1,
+            "waiting_customer": 0,
+            "urgent": 1,
+            "escalated": 1,
+            "sla_near": 0,
+            "sla_overdue": 1,
+        },
         buckets=buckets,
     )
     assert "ManagerBot Workdesk" in rendered

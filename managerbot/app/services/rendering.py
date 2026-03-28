@@ -39,15 +39,15 @@ def render_hub(actor: ManagerActor, presence: PresenceStatus, counts: dict[str, 
         lines.append("All clear — no urgent items.")
     else:
         for bucket in buckets:
-            count = len(bucket.items)
+            count = counts.get(bucket.queue_key, len(bucket.items))
             if count == 0:
                 lines.append(f"· {bucket.title}: 0")
             else:
                 lines.append(f"🔴 {bucket.title}: {count}")
                 for item in bucket.items[:3]:
                     lines.append(f"  — #{item.case_display_number} {item.customer_label or '—'}: {item.reason}")
-                if count > 3:
-                    lines.append(f"  … and {count - 3} more")
+                if count > len(bucket.items):
+                    lines.append(f"  … and {count - len(bucket.items)} more")
 
     lines.extend([
         "",
@@ -70,7 +70,7 @@ def render_queue(queue_key: str, items: list[QueueItem], offset: int, filters: Q
     lines.append("")
     for item in items:
         sla_state = sla.classify(item.sla_due_at)
-        archive_mark = " · archived" if item.is_archived else ""
+        archive_mark = " [ARCHIVE]" if item.is_archived else ""
         waiting = _waiting_label(item.waiting_state)
         status = _status_label(item.operational_status)
         priority = _priority_label(item.priority)
@@ -438,7 +438,7 @@ def render_search_results(query: str, results: list[SearchResultItem], filters: 
         order_hint = f" O#{item.linked_order_display_number}" if item.linked_order_display_number else ""
         identity_hint = _identity_hint(item.customer_label, item.customer_actor_id, item.customer_telegram_chat_id)
         lines.append(
-            f"#{item.case_display_number}{archive_mark}{order_hint} | {identity_hint} | {_status_label(item.operational_status)} | {_waiting_label(item.waiting_state)} | Priority {_priority_label(item.priority)} | Escalation {normalize_escalation_level(item.escalation_level) if is_escalated(item.escalation_level) else 'none'}"
+            f"#{item.case_display_number}{archive_mark}{order_hint} | {identity_hint} | {_status_label(item.operational_status)} | {_waiting_label(item.waiting_state)} | Priority {_priority_label(item.priority)} | Escalation {normalize_escalation_level(item.escalation_level) if is_escalated(item.escalation_level) else 'none'} (p:{item.priority})"
         )
     return "\\n".join(lines)
 
