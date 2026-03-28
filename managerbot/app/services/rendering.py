@@ -175,6 +175,26 @@ def render_case_detail(
     return "\n".join(head)
 
 
+def render_reply_preview(case_detail: CaseDetail, draft_text: str, *, guardrail_issues: list[str] | None = None) -> str:
+    lines = [
+        f"Customer reply preview · Case #{case_detail.case_display_number}",
+        "",
+        "Customer-visible message (exactly as sent):",
+        draft_text,
+    ]
+    commercial_lines = _render_commercial_constraint_lines(case_detail.item_detail)
+    if commercial_lines:
+        lines.append("")
+        lines.append("Commercial context check before send:")
+        lines.extend(commercial_lines)
+    if guardrail_issues:
+        lines.append("")
+        lines.append("Wording guardrail:")
+        for issue in guardrail_issues:
+            lines.append(f"- {issue}")
+    return "\n".join(lines)
+
+
 def render_order_summary_panel(detail: CaseDetail, *, configured_targets: dict[str, bool]) -> str:
     if not detail.linked_order_display_number:
         return (
@@ -261,6 +281,25 @@ def _render_item_detail(item: ManagerItemDetail | None) -> list[str]:
         lines.append(f"- Draft: {'yes' if item.in_draft else 'no'}")
     if len(lines) == 2:
         return []
+    return lines
+
+
+def _render_commercial_constraint_lines(item: ManagerItemDetail | None) -> list[str]:
+    if not item:
+        return []
+    lines: list[str] = []
+    if item.selling_unit:
+        lines.append(f"- Selling unit: {item.selling_unit}")
+    if item.min_order:
+        lines.append(f"- Min order: {item.min_order}")
+    if item.increment:
+        lines.append(f"- Increment: {item.increment}")
+    if item.packaging_context:
+        lines.append(f"- In box: {item.packaging_context}")
+    if item.is_active is not None:
+        lines.append(f"- Availability: {'active' if item.is_active else 'inactive'}")
+    if item.in_draft is not None:
+        lines.append(f"- Draft quote: {'yes' if item.in_draft else 'no'}")
     return lines
 
 

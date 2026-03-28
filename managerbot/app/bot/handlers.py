@@ -38,6 +38,7 @@ from app.services.rendering import (
     render_hub,
     render_order_summary_panel,
     render_queue,
+    render_reply_preview,
     render_search_results,
 )
 from app.state.manager_session import ManagerSessionStore
@@ -170,7 +171,11 @@ def build_router(
                 await session_store.set(message.from_user.id, state)
                 await message.answer("Case context expired. Re-open the case.")
                 return
-            preview = f"Reply preview for Case #{case_detail.case_display_number}\n\n{state.compose_draft_text}"
+            preview = render_reply_preview(
+                case_detail,
+                state.compose_draft_text,
+                guardrail_issues=compose_service.customer_visible_guardrail_issues(state.compose_draft_text),
+            )
             await panel_manager.render(message, preview, reply_preview_keyboard())
         else:
             note_preview = f"Internal note preview:\n\n{state.compose_draft_text}\n\nTap Save note draft to persist."
@@ -268,7 +273,7 @@ def build_router(
                 compose_service.start_reply(state, state.selected_case_id)
                 await panel_manager.render(
                     msg,
-                    "Compose reply to customer.\nSend the reply text in the next message.\nYou will be asked to confirm before sending.",
+                    "Compose customer-visible reply.\nKeep wording commercially clear (for example: Min order, Increment, In box).\nSend text in the next message, then confirm before sending.",
                     compose_keyboard(),
                 )
         elif callback_data.action == "note_start":
@@ -412,6 +417,22 @@ def build_router(
                 compose_service.cancel(state)
                 await callback.answer("Reply draft is stale. Re-open case and compose again.", show_alert=True)
             else:
+                guardrail_issues = compose_service.customer_visible_guardrail_issues(state.compose_draft_text)
+                if guardrail_issues:
+                    detail = await surface_service.case_detail(actor, state.compose_case_id)
+                    if detail:
+                        await panel_manager.render(
+                            msg,
+                            render_reply_preview(
+                                detail,
+                                state.compose_draft_text,
+                                guardrail_issues=guardrail_issues,
+                            ),
+                            reply_preview_keyboard(),
+                        )
+                    await callback.answer("Update wording to commercial terms before sending.", show_alert=True)
+                    await session_store.set(callback.from_user.id, state)
+                    return
                 result_notice = await surface_service.send_reply(actor, state.compose_case_id, state.compose_draft_text)
                 compose_service.cancel(state)
                 await render_selected_case(msg, actor, state, prefix=f"{result_notice}\n\n")
@@ -485,7 +506,15 @@ def build_router(
                 else:
                     detail = await surface_service.case_detail(actor, state.selected_case_id)
                     if detail:
-                        await panel_manager.render(msg, f"AI reply draft loaded for Case #{detail.case_display_number}.\n\n{state.compose_draft_text}", reply_preview_keyboard())
+                        await panel_manager.render(
+                            msg,
+                            render_reply_preview(
+                                detail,
+                                state.compose_draft_text,
+                                guardrail_issues=compose_service.customer_visible_guardrail_issues(state.compose_draft_text),
+                            ),
+                            reply_preview_keyboard(),
+                        )
         elif callback_data.action == "ai_use_note_draft":
             if not state.selected_case_id:
                 await callback.answer("Open a case first", show_alert=True)
