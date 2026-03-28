@@ -1275,6 +1275,14 @@ class SqlNotificationRepository:
                         + BUSINESS_RELEVANCE_SQL
                         + """
                         ),
+                        first_visible_case as (
+                            select
+                                vb.quote_case_id,
+                                vb.case_display_number
+                            from visible_business vb
+                            order by vb.updated_at asc, vb.quote_case_id asc
+                            limit 1
+                        ),
                         case_visible_batch as (
                             select
                                 case
@@ -1283,17 +1291,17 @@ class SqlNotificationRepository:
                                         'case_visible_batch:' ||
                                         coalesce(cast(max(updated_at) as text), '') || ':' ||
                                         cast(count(*) as text) || ':' ||
-                                        coalesce(cast(min(quote_case_id) as text), '')
+                                        coalesce(cast((select quote_case_id from first_visible_case) as text), '')
                                 end as event_key,
                                 'case_visible_batch' as kind,
-                                min(quote_case_id) as case_id,
-                                min(case_display_number) as case_display_number,
-                                null as assigned_manager_actor_id,
+                                (select quote_case_id from first_visible_case) as case_id,
+                                (select case_display_number from first_visible_case) as case_display_number,
+                                cast(null as uuid) as assigned_manager_actor_id,
                                 case
                                     when count(*) = 1 then
-                                        '1 new incoming case: #' || cast(min(case_display_number) as text)
+                                        '1 new incoming case: #' || cast((select case_display_number from first_visible_case) as text)
                                     when count(*) > 1 then
-                                        cast(count(*) as text) || ' new incoming cases. Earliest: #' || cast(min(case_display_number) as text)
+                                        cast(count(*) as text) || ' new incoming cases. Earliest: #' || cast((select case_display_number from first_visible_case) as text)
                                     else null
                                 end as summary
                             from visible_business
