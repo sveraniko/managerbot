@@ -20,6 +20,7 @@ class PresenceStatus(str, Enum):
 
 class QueueKey(str, Enum):
     NEW = "new"
+    NEW_INCOMING = "new_incoming"
     MINE = "mine"
     WAITING_ME = "waiting_me"
     WAITING_CUSTOMER = "waiting_customer"

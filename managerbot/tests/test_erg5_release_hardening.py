@@ -12,12 +12,12 @@ def _texts(markup) -> list[str]:
 def test_dead_buttons_are_hidden_for_empty_contexts() -> None:
     buckets = [
         HotTaskBucket(HotTaskBucketKey.NEEDS_REPLY_NOW, "Needs reply now", "waiting_me", []),
-        HotTaskBucket(HotTaskBucketKey.NEW_BUSINESS, "New business", "new", []),
+        HotTaskBucket(HotTaskBucketKey.NEW_BUSINESS, "New incoming", "new_incoming", []),
     ]
     hub = hub_keyboard(buckets)
     labels = _texts(hub)
     assert "Open Needs reply now" not in labels
-    assert "Open New business" not in labels
+    assert "Open New incoming" not in labels
 
     queue = queue_keyboard([], has_more=False)
     assert "Load more" not in _texts(queue)

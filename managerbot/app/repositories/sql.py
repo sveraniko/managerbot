@@ -34,6 +34,22 @@ from app.services.escalation import (
 from app.services.priority import is_high_or_higher_priority, is_top_tier_priority, priority_rank
 
 
+BUSINESS_RELEVANCE_SQL = """
+(
+    s.last_customer_message_at is not null
+    or exists (
+        select 1
+        from ops.quote_case_thread_entries te
+        where te.quote_case_id = s.quote_case_id
+          and te.direction = 'inbound'
+    )
+    or qc.customer_actor_id is not null
+    or qc.customer_telegram_chat_id is not null
+    or nullif(trim(coalesce(qc.customer_label, '')), '') is not null
+)
+"""
+
+
 class SqlActorRepository:
     def __init__(self, session_factory: async_sessionmaker) -> None:
         self._sf = session_factory
@@ -103,7 +119,20 @@ class SqlQueueRepository:
         self._sf = session_factory
 
     async def summary_counts(self, actor_id):
-        keys = ["new", "mine", "waiting_me", "waiting_customer", "urgent", "escalated", "sla_near", "sla_overdue"]
+        keys = [
+            "new",
+            "new_incoming",
+            "mine",
+            "waiting_me",
+            "waiting_customer",
+            "urgent",
+            "escalated",
+            "sla_near",
+            "sla_overdue",
+            "sla_risk",
+            "urgent_escalated",
+            "failed_delivery",
+        ]
         result = {k: 0 for k in keys}
         now = datetime.now(timezone.utc)
         near_cutoff = now.timestamp() + 1800
@@ -112,8 +141,35 @@ class SqlQueueRepository:
                 await session.execute(
                     text(
                         """
-                        select status, waiting_state, priority, escalation_level, assigned_manager_actor_id, sla_due_at
-                        from ops.quote_case_ops_states
+                        select
+                            s.status,
+                            s.waiting_state,
+                            s.priority,
+                            s.escalation_level,
+                            s.assigned_manager_actor_id,
+                            s.sla_due_at,
+                            s.last_failed_delivery_at,
+                            s.is_business_relevant
+                        from (
+                            select
+                                s.status,
+                                s.waiting_state,
+                                s.priority,
+                                s.escalation_level,
+                                s.assigned_manager_actor_id,
+                                s.sla_due_at,
+                                (
+                                    select max(a.attempted_at)
+                                    from ops.reply_delivery_attempts a
+                                    where a.quote_case_id = s.quote_case_id and a.status = 'failed'
+                                ) as last_failed_delivery_at,
+                                case when """
+                        + BUSINESS_RELEVANCE_SQL
+                        + """
+                                then 1 else 0 end as is_business_relevant
+                            from ops.quote_case_ops_states s
+                            join core.quote_cases qc on qc.id = s.quote_case_id
+                        ) s
                         """
                     )
                 )
@@ -122,6 +178,8 @@ class SqlQueueRepository:
             escalation_level = normalize_escalation_level(row.escalation_level)
             if row.status == "new":
                 result["new"] += 1
+                if row.is_business_relevant:
+                    result["new_incoming"] += 1
             if row.assigned_manager_actor_id == actor_id and row.status in ("new", "active"):
                 result["mine"] += 1
                 if row.waiting_state in ("none", "waiting_manager", "waiting_owner"):
@@ -132,13 +190,20 @@ class SqlQueueRepository:
                 result["urgent"] += 1
             if is_escalated(escalation_level) and row.status not in ("resolved", "closed"):
                 result["escalated"] += 1
+            if row.status not in ("resolved", "closed"):
+                if is_high_or_higher_priority(row.priority) or is_escalated(escalation_level):
+                    result["urgent_escalated"] += 1
+                if row.last_failed_delivery_at:
+                    result["failed_delivery"] += 1
             if row.sla_due_at:
                 due = row.sla_due_at
                 due_ts = due.timestamp() if hasattr(due, "timestamp") else datetime.fromisoformat(str(due)).timestamp()
                 if due_ts <= now.timestamp():
                     result["sla_overdue"] += 1
+                    result["sla_risk"] += 1
                 elif due_ts <= near_cutoff:
                     result["sla_near"] += 1
+                    result["sla_risk"] += 1
         return result
 
     async def list_queue(self, queue_key, actor_id, offset, limit, filters: QueueFilters | None = None):
@@ -148,6 +213,8 @@ class SqlQueueRepository:
                 qc.id as case_id,
                 qc.display_number as case_display_number,
                 qc.customer_label as customer_label,
+                qc.customer_actor_id,
+                qc.customer_telegram_chat_id,
                 s.status as operational_status,
                 s.waiting_state,
                 s.assigned_manager_actor_id,
@@ -156,6 +223,11 @@ class SqlQueueRepository:
                 s.last_customer_message_at,
                 s.sla_due_at,
                 s.updated_at as ops_updated_at,
+                exists (
+                    select 1
+                    from ops.quote_case_thread_entries te
+                    where te.quote_case_id = s.quote_case_id and te.direction = 'inbound'
+                ) as has_inbound_thread,
                 (
                     select max(a.attempted_at)
                     from ops.reply_delivery_attempts a
@@ -204,6 +276,27 @@ class SqlQueueRepository:
         elif queue_key == "new":
             filtered = [i for i in entries if i["operational_status"] == "new"]
             filtered.sort(key=lambda i: (priority_rank(i["priority"]), -escalation_rank(i["escalation_level"]), -(i["ops_updated_at"] or epoch).timestamp(), int(i["case_display_number"])))
+        elif queue_key == "new_incoming":
+            filtered = [
+                i
+                for i in entries
+                if i["operational_status"] == "new"
+                and (
+                    i["last_customer_message_at"] is not None
+                    or bool(i["customer_actor_id"])
+                    or i["customer_telegram_chat_id"] is not None
+                    or bool((i.get("customer_label") or "").strip())
+                    or i.get("has_inbound_thread", False)
+                )
+            ]
+            filtered.sort(
+                key=lambda i: (
+                    priority_rank(i["priority"]),
+                    -escalation_rank(i["escalation_level"]),
+                    -(i["last_customer_message_at"] or i["ops_updated_at"] or epoch).timestamp(),
+                    int(i["case_display_number"]),
+                )
+            )
         elif queue_key == "mine":
             filtered = [i for i in entries if i["assigned_manager_actor_id"] == actor_id]
             filtered.sort(key=lambda i: (priority_rank(i["priority"]), sla_due_rank(i["sla_due_at"]), -escalation_rank(i["escalation_level"]), (i["sla_due_at"] or i["last_customer_message_at"] or epoch).timestamp(), int(i["case_display_number"])))
@@ -383,6 +476,8 @@ class SqlQueueRepository:
                             qc.id as case_id,
                             qc.display_number as case_display_number,
                             qc.customer_label as customer_label,
+                            qc.customer_actor_id as customer_actor_id,
+                            qc.customer_telegram_chat_id as customer_telegram_chat_id,
                             s.status as operational_status,
                             s.waiting_state,
                             s.priority,
@@ -392,6 +487,11 @@ class SqlQueueRepository:
                             s.sla_due_at,
                             s.updated_at as ops_updated_at,
                             o.display_number as linked_order_display_number,
+                            exists (
+                                select 1
+                                from ops.quote_case_thread_entries te
+                                where te.quote_case_id = s.quote_case_id and te.direction = 'inbound'
+                            ) as has_inbound_thread,
                             (
                                 select max(a.attempted_at)
                                 from ops.reply_delivery_attempts a
@@ -460,17 +560,28 @@ class SqlQueueRepository:
         )
         needs_reply = [to_item(i, "Customer waiting for manager response.", last_event_at=i["last_customer_message_at"]) for i in needs_reply_raw[:item_limit]]
 
-        # New business: new/unassigned surfaced opportunities.
-        new_business_raw = [i for i in raw if i["operational_status"] == "new"]
+        # New incoming: real business-relevant new cases only.
+        new_business_raw = [
+            i
+            for i in raw
+            if i["operational_status"] == "new"
+            and (
+                i["last_customer_message_at"] is not None
+                or bool(i["customer_actor_id"])
+                or i["customer_telegram_chat_id"] is not None
+                or bool((i.get("customer_label") or "").strip())
+                or i.get("has_inbound_thread", False)
+            )
+        ]
         new_business_raw.sort(
             key=lambda i: (
                 priority_rank(i["priority"]),
                 -escalation_rank(i["escalation_level"]),
-                -(i["ops_updated_at"] or epoch).timestamp(),
+                -(i["last_customer_message_at"] or i["ops_updated_at"] or epoch).timestamp(),
                 i["case_display_number"],
             )
         )
-        new_business = [to_item(i, "Newly visible case needs triage.", last_event_at=i["ops_updated_at"]) for i in new_business_raw[:item_limit]]
+        new_business = [to_item(i, "New incoming case needs triage.", last_event_at=i["last_customer_message_at"] or i["ops_updated_at"]) for i in new_business_raw[:item_limit]]
 
         # SLA risk: overdue before near-breach.
         sla_risk_raw = [i for i in raw if sla_rank(i["sla_due_at"]) in (0, 1)]
@@ -522,7 +633,7 @@ class SqlQueueRepository:
 
         return [
             HotTaskBucket(HotTaskBucketKey.NEEDS_REPLY_NOW, "Needs reply now", "waiting_me", needs_reply),
-            HotTaskBucket(HotTaskBucketKey.NEW_BUSINESS, "New business", "new", new_business),
+            HotTaskBucket(HotTaskBucketKey.NEW_BUSINESS, "New incoming", "new_incoming", new_business),
             HotTaskBucket(HotTaskBucketKey.SLA_AT_RISK, "SLA at risk", "sla_risk", sla_risk),
             HotTaskBucket(HotTaskBucketKey.URGENT_ESCALATED, "Urgent / VIP / escalated", "urgent_escalated", urgent),
             HotTaskBucket(HotTaskBucketKey.FAILED_DELIVERY, "Failed delivery", "failed_delivery", failed),
@@ -1152,16 +1263,44 @@ class SqlNotificationRepository:
                 await session.execute(
                     text(
                         """
-                        select
-                            'case_visible:' || s.quote_case_id || ':' || coalesce(s.updated_at::text, '') as event_key,
-                            'case_visible' as kind,
-                            s.quote_case_id as case_id,
-                            qc.display_number as case_display_number,
-                            s.assigned_manager_actor_id,
-                            null as summary
-                        from ops.quote_case_ops_states s
-                        join core.quote_cases qc on qc.id = s.quote_case_id
-                        where s.status = 'new'
+                        with visible_business as (
+                            select
+                                s.quote_case_id,
+                                qc.display_number as case_display_number,
+                                s.updated_at
+                            from ops.quote_case_ops_states s
+                            join core.quote_cases qc on qc.id = s.quote_case_id
+                            where s.status = 'new'
+                              and """
+                        + BUSINESS_RELEVANCE_SQL
+                        + """
+                        ),
+                        case_visible_batch as (
+                            select
+                                case
+                                    when count(*) = 0 then null
+                                    else
+                                        'case_visible_batch:' ||
+                                        coalesce(cast(max(updated_at) as text), '') || ':' ||
+                                        cast(count(*) as text) || ':' ||
+                                        coalesce(cast(min(quote_case_id) as text), '')
+                                end as event_key,
+                                'case_visible_batch' as kind,
+                                min(quote_case_id) as case_id,
+                                min(case_display_number) as case_display_number,
+                                null as assigned_manager_actor_id,
+                                case
+                                    when count(*) = 1 then
+                                        '1 new incoming case: #' || cast(min(case_display_number) as text)
+                                    when count(*) > 1 then
+                                        cast(count(*) as text) || ' new incoming cases. Earliest: #' || cast(min(case_display_number) as text)
+                                    else null
+                                end as summary
+                            from visible_business
+                        )
+                        select event_key, kind, case_id, case_display_number, assigned_manager_actor_id, summary
+                        from case_visible_batch
+                        where event_key is not null
                         union all
                         select
                             'new_inbound:' || t.id as event_key,

@@ -4,7 +4,8 @@ from app.bot.callbacks import MBCallback
 from app.models import CustomerCard, HotTaskBucket, QueueFilters, QueueItem, SearchResultItem
 
 
-def hub_keyboard(buckets: list[HotTaskBucket]) -> InlineKeyboardMarkup:
+def hub_keyboard(buckets: list[HotTaskBucket], queue_counts: dict[str, int] | None = None) -> InlineKeyboardMarkup:
+    queue_counts = queue_counts or {}
     rows = [
         [InlineKeyboardButton(text="Presence", callback_data=MBCallback(action="presence").pack())],
         [InlineKeyboardButton(text="Search case/order/customer", callback_data=MBCallback(action="search_start").pack())],
@@ -14,7 +15,12 @@ def hub_keyboard(buckets: list[HotTaskBucket]) -> InlineKeyboardMarkup:
     for bucket in buckets:
         if bucket.items:
             rows.append(
-                [InlineKeyboardButton(text=f"Open {bucket.title} ({len(bucket.items)})", callback_data=MBCallback(action="queue", value=bucket.queue_key).pack())]
+                [
+                    InlineKeyboardButton(
+                        text=f"Open {bucket.title} ({queue_counts.get(bucket.queue_key, len(bucket.items))})",
+                        callback_data=MBCallback(action="queue", value=bucket.queue_key).pack(),
+                    )
+                ]
             )
     rows.extend(
         [
@@ -196,7 +202,7 @@ def reply_preview_keyboard() -> InlineKeyboardMarkup:
 def _bucket_short(title: str) -> str:
     mapping = {
         "Needs reply now": "Reply",
-        "New business": "New",
+        "New incoming": "New",
         "SLA at risk": "SLA",
         "Urgent / VIP / escalated": "Urgent",
         "Failed delivery": "Failed",

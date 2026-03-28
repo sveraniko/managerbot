@@ -53,7 +53,7 @@ class FakeQueueRepository:
         buckets: list[HotTaskBucket] = []
         mappings = [
             (HotTaskBucketKey.NEEDS_REPLY_NOW, "Needs reply now", "waiting_me"),
-            (HotTaskBucketKey.NEW_BUSINESS, "New business", "new"),
+            (HotTaskBucketKey.NEW_BUSINESS, "New incoming", "new_incoming"),
             (HotTaskBucketKey.SLA_AT_RISK, "SLA at risk", "sla_risk"),
             (HotTaskBucketKey.URGENT_ESCALATED, "Urgent / VIP / escalated", "urgent_escalated"),
             (HotTaskBucketKey.FAILED_DELIVERY, "Failed delivery", "failed_delivery"),
