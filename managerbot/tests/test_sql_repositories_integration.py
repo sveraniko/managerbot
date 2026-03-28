@@ -37,6 +37,30 @@ async def _make_session_factory() -> async_sessionmaker:
                 """
             )
         )
+        await conn.execute(
+            text(
+                """
+                create table core.quote_case_items(
+                    id text primary key,
+                    quote_case_id text not null,
+                    display_title text,
+                    brand text,
+                    sku_code text,
+                    selling_unit text,
+                    min_order text,
+                    increment text,
+                    in_box text,
+                    shelf_life text,
+                    country_of_origin text,
+                    weight text,
+                    piece_weight text,
+                    description text,
+                    is_active integer,
+                    in_draft integer
+                )
+                """
+            )
+        )
         await conn.execute(text("create table core.orders(id text primary key, source_quote_case_id text not null, display_number integer not null)"))
 
         await conn.execute(
@@ -166,6 +190,19 @@ async def _make_session_factory() -> async_sessionmaker:
             )
         )
         await conn.execute(text("insert into core.orders(id, source_quote_case_id, display_number) values ('o1', 'c1', 9001), ('o2', 'c2', 9002)"))
+        await conn.execute(
+            text(
+                """
+                insert into core.quote_case_items(
+                    id, quote_case_id, display_title, brand, sku_code, selling_unit, min_order, increment, in_box,
+                    shelf_life, country_of_origin, weight, piece_weight, description, is_active, in_draft
+                ) values (
+                    'i1', 'c1', 'Almond Dragee', 'SweetCo', 'SW-001', 'box', '2 boxes', '1 box', '24 pcs',
+                    '9 months', 'Italy', '2.4 kg', '100 g', 'Crunchy almond dragee with cocoa coating.', 1, 0
+                )
+                """
+            )
+        )
 
         now = datetime.now(timezone.utc).isoformat()
         await conn.execute(
@@ -323,6 +360,18 @@ def test_case_detail_and_claim_persist_canonical_assignment_event() -> None:
         assert detail.customer_card.actor_id == "cust"
         assert detail.customer_card.telegram_chat_id == 40001
         assert detail.customer_card.telegram_user_id == 7777
+        assert detail.item_detail is not None
+        assert detail.item_detail.title == "Almond Dragee"
+        assert detail.item_detail.selling_unit == "box"
+        assert detail.item_detail.min_order == "2 boxes"
+        assert detail.item_detail.increment == "1 box"
+        assert detail.item_detail.packaging_context == "24 pcs"
+        assert detail.item_detail.shelf_life == "9 months"
+        assert detail.item_detail.origin == "Italy"
+        assert detail.item_detail.weight == "2.4 kg"
+        assert detail.item_detail.piece_weight == "100 g"
+        assert detail.item_detail.is_active is True
+        assert detail.item_detail.in_draft is False
         assert [entry.body for entry in detail.thread_entries] == ["Need update", "Working on it"]
 
         claimed = await cases.claim_case("c1", "m1")
@@ -354,6 +403,17 @@ def test_case_detail_and_claim_persist_canonical_assignment_event() -> None:
             assert event.from_manager_actor_id is None
             assert event.to_manager_actor_id == "m1"
             assert event.triggered_by_actor_id == "m1"
+
+    asyncio.run(run())
+
+
+def test_case_detail_item_contract_absent_when_no_structured_fields() -> None:
+    async def run() -> None:
+        sf = await _make_session_factory()
+        cases = SqlCaseRepository(sf)
+        detail = await cases.get_detail("c2", "m1")
+        assert detail is not None
+        assert detail.item_detail is None
 
     asyncio.run(run())
 

@@ -1,6 +1,17 @@
 from datetime import datetime, timezone
 
-from app.models import CaseDetail, CustomerCard, HotTaskBucket, HotTaskItem, ManagerActor, PresenceStatus, QueueFilters, QueueItem, SearchResultItem
+from app.models import (
+    CaseDetail,
+    CustomerCard,
+    HotTaskBucket,
+    HotTaskItem,
+    ManagerActor,
+    ManagerItemDetail,
+    PresenceStatus,
+    QueueFilters,
+    QueueItem,
+    SearchResultItem,
+)
 from app.services.escalation import is_escalated, normalize_escalation_level
 from app.services.ai_reader import AIReaderAnalysis
 from app.services.ai_recommender import AIRecommendation
@@ -94,6 +105,7 @@ def render_case_detail(
     if detail.linked_order_display_number:
         head.append(f"Order #{detail.linked_order_display_number}")
     head.extend(_render_order_action_block(detail))
+    head.extend(_render_item_detail(detail.item_detail))
     if detail.last_delivery:
         delivery_line = f"Delivery: {detail.last_delivery.status}"
         if detail.last_delivery.error_message:
@@ -213,6 +225,43 @@ def _snippet(text: str, limit: int = 140) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 1] + "…"
+
+
+def _render_item_detail(item: ManagerItemDetail | None) -> list[str]:
+    if not item:
+        return []
+    lines = ["", "Item detail:"]
+    if item.title:
+        lines.append(f"- Item: {item.title}")
+    if item.brand:
+        lines.append(f"- Brand: {item.brand}")
+    if item.sku_code:
+        lines.append(f"- SKU: {item.sku_code}")
+    if item.selling_unit:
+        lines.append(f"- Selling unit: {item.selling_unit}")
+    if item.min_order:
+        lines.append(f"- Min order: {item.min_order}")
+    if item.increment:
+        lines.append(f"- Increment: {item.increment}")
+    if item.packaging_context:
+        lines.append(f"- In box: {item.packaging_context}")
+    if item.shelf_life:
+        lines.append(f"- Shelf life: {item.shelf_life}")
+    if item.origin:
+        lines.append(f"- Origin: {item.origin}")
+    if item.weight:
+        lines.append(f"- Weight: {item.weight}")
+    if item.piece_weight:
+        lines.append(f"- Piece weight: {item.piece_weight}")
+    if item.description:
+        lines.append(f"- Description: {_snippet(item.description, 240)}")
+    if item.is_active is not None:
+        lines.append(f"- Availability: {'active' if item.is_active else 'inactive'}")
+    if item.in_draft is not None:
+        lines.append(f"- Draft: {'yes' if item.in_draft else 'no'}")
+    if len(lines) == 2:
+        return []
+    return lines
 
 
 def _bucket_items(buckets: list[HotTaskBucket], key: str) -> list[HotTaskItem]:

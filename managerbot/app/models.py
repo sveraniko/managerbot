@@ -109,6 +109,24 @@ class DeliverySnapshot:
 
 
 @dataclass(slots=True)
+class ManagerItemDetail:
+    title: str | None = None
+    brand: str | None = None
+    sku_code: str | None = None
+    selling_unit: str | None = None
+    min_order: str | None = None
+    increment: str | None = None
+    packaging_context: str | None = None
+    shelf_life: str | None = None
+    origin: str | None = None
+    weight: str | None = None
+    piece_weight: str | None = None
+    description: str | None = None
+    is_active: bool | None = None
+    in_draft: bool | None = None
+
+
+@dataclass(slots=True)
 class CustomerCard:
     label: str | None
     actor_id: str | None = None
@@ -151,6 +169,7 @@ class CaseDetail:
     thread_entries: list[ThreadEntry] = field(default_factory=list)
     internal_notes: list[InternalNote] = field(default_factory=list)
     last_delivery: DeliverySnapshot | None = None
+    item_detail: ManagerItemDetail | None = None
 
 
 @dataclass(slots=True)
