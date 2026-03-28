@@ -14,7 +14,7 @@ from app.models import (
 )
 from app.services.escalation import is_escalated, normalize_escalation_level
 from app.services.ai_reader import AIReaderAnalysis
-from app.services.ai_recommender import AIRecommendation
+from app.services.ai_recommender import AIHandoffState, AIRecommendation
 from app.services.ai_state import AISnapshotMeta
 from app.services.sla import SlaService
 
@@ -156,6 +156,7 @@ def render_case_detail(
             head.append(f"- Model/prompt: {ai_recommendation_meta.model} / {ai_recommendation_meta.prompt_version} ({source})")
         head.append(f"- Recommended action: {ai_recommendation.recommended_action.value}")
         head.append(f"- Next step: {_snippet(ai_recommendation.recommended_next_step, 220)}")
+        head.extend(_render_ai_handoff(ai_recommendation, detail.item_detail))
         head.append(f"- Reply draft: {_snippet(ai_recommendation.draft_reply)}")
         head.append(f"- Internal note draft: {_snippet(ai_recommendation.draft_internal_note)}")
         head.append(
@@ -301,6 +302,66 @@ def _render_commercial_constraint_lines(item: ManagerItemDetail | None) -> list[
     if item.in_draft is not None:
         lines.append(f"- Draft quote: {'yes' if item.in_draft else 'no'}")
     return lines
+
+
+def _render_ai_handoff(recommendation: AIRecommendation, item: ManagerItemDetail | None) -> list[str]:
+    status = recommendation.handoff_state
+    rationale = recommendation.handoff_rationale
+    if status == AIHandoffState.RESOLVED and not _item_semantics_present(item):
+        status = AIHandoffState.NEEDS_HUMAN_REVIEW
+        rationale = "AI marked resolved, but structured item semantics are incomplete in manager context."
+    if status == AIHandoffState.NOT_FOUND and _item_semantics_present(item):
+        status = AIHandoffState.NEEDS_HUMAN_REVIEW
+        rationale = "AI marked not found, but case already has item details. Verify match manually."
+
+    lines = [f"- Handoff status: {status.value}", f"- Handoff rationale: {_snippet(rationale, 220)}"]
+    resolved_title = _resolved_item_title(item, recommendation)
+    if resolved_title:
+        lines.append(f"- Resolved item: {resolved_title}")
+
+    constraint_lines = _render_commercial_constraint_lines(item)
+    if constraint_lines:
+        lines.append("- Structured commercial constraints:")
+        lines.extend(f"  {line}" for line in constraint_lines)
+
+    if recommendation.alternatives:
+        lines.append("- Alternatives:")
+        for idx, alt in enumerate(recommendation.alternatives, start=1):
+            alt_parts = [alt.title]
+            if alt.selling_unit:
+                alt_parts.append(f"Selling unit {alt.selling_unit}")
+            if alt.min_order:
+                alt_parts.append(f"Min order {alt.min_order}")
+            if alt.increment:
+                alt_parts.append(f"Increment {alt.increment}")
+            if alt.packaging_context:
+                alt_parts.append(f"Packaging {alt.packaging_context}")
+            if alt.availability:
+                alt_parts.append(f"Availability {alt.availability}")
+            rendered = " | ".join(alt_parts)
+            if alt.rationale:
+                rendered += f" — {_snippet(alt.rationale, 120)}"
+            lines.append(f"  {idx}. {rendered}")
+
+    if status in {AIHandoffState.AMBIGUOUS, AIHandoffState.NOT_FOUND, AIHandoffState.NEEDS_HUMAN_REVIEW}:
+        lines.append("- Manager action safety: do not send AI draft without manual correction/review.")
+    return lines
+
+
+def _resolved_item_title(item: ManagerItemDetail | None, recommendation: AIRecommendation) -> str | None:
+    if item and item.title:
+        return item.title
+    if recommendation.resolved_item_title:
+        return recommendation.resolved_item_title
+    if recommendation.alternatives:
+        return recommendation.alternatives[0].title
+    return None
+
+
+def _item_semantics_present(item: ManagerItemDetail | None) -> bool:
+    if not item:
+        return False
+    return bool(item.title and item.selling_unit and item.min_order and item.increment)
 
 
 def _bucket_items(buckets: list[HotTaskBucket], key: str) -> list[HotTaskItem]:

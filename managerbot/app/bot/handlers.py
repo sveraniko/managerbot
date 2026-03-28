@@ -27,6 +27,7 @@ from app.bot.panel_manager import PanelManager
 from app.models import QueueFilters
 from app.services.access import AccessService
 from app.services.ai_state import analysis_for_case, bind_ai_recommendation, bind_ai_result, clear_ai_snapshot, recommendation_for_case
+from app.services.ai_recommender import recommendation_supports_draft_adoption
 from app.services.compose import ComposeStateService
 from app.services.manager_surface import ManagerSurfaceService
 from app.services.navigation import NavigationService
@@ -73,6 +74,7 @@ def build_router(
         ai_analysis, ai_error, ai_analysis_meta = analysis_for_case(state, detail.case_id)
         ai_recommendation, ai_recommendation_error, ai_recommendation_meta = recommendation_for_case(state, detail.case_id)
         low_conf = bool(ai_recommendation and ai_recommendation.confidence < surface_service.low_confidence_threshold)
+        can_use_ai_draft = bool(ai_recommendation and recommendation_supports_draft_adoption(ai_recommendation))
         await panel_manager.render(
             message,
             prefix
@@ -87,7 +89,7 @@ def build_router(
                 low_confidence_threshold=surface_service.low_confidence_threshold,
             ),
             case_keyboard(
-                has_ai_recommendation=ai_recommendation is not None,
+                has_ai_recommendation=can_use_ai_draft,
                 ai_low_confidence=low_conf,
                 has_order_actions=has_order(detail),
                 has_contact_actions=_has_contact_actions(detail),
@@ -501,6 +503,8 @@ def build_router(
                 recommendation, _, _ = recommendation_for_case(state, state.selected_case_id)
                 if not recommendation or state.ai_case_id != state.selected_case_id:
                     await callback.answer("No valid AI recommendation for this case.", show_alert=True)
+                elif not recommendation_supports_draft_adoption(recommendation):
+                    await callback.answer("AI handoff is not safe for draft adoption. Review and edit manually.", show_alert=True)
                 elif not compose_service.start_reply_from_ai(state, state.selected_case_id, recommendation.draft_reply):
                     await callback.answer("AI reply draft is unavailable for this case.", show_alert=True)
                 else:
@@ -522,6 +526,8 @@ def build_router(
                 recommendation, _, _ = recommendation_for_case(state, state.selected_case_id)
                 if not recommendation or state.ai_case_id != state.selected_case_id:
                     await callback.answer("No valid AI recommendation for this case.", show_alert=True)
+                elif not recommendation_supports_draft_adoption(recommendation):
+                    await callback.answer("AI handoff is not safe for draft adoption. Review and edit manually.", show_alert=True)
                 elif not compose_service.start_note_from_ai(state, state.selected_case_id, recommendation.draft_internal_note):
                     await callback.answer("AI note draft is unavailable for this case.", show_alert=True)
                 else:

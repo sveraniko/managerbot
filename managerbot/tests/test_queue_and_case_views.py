@@ -16,6 +16,7 @@ from app.models import (
     ThreadEntry,
 )
 from app.repositories.fakes import FakeCaseRepository, FakePresenceRepository, FakeQueueRepository
+from app.services.ai_recommender import AIHandoffState, AIRecommendation, RecommendedAction
 from app.services.delivery import DeliveryResult
 from app.services.manager_surface import ManagerSurfaceService
 from app.services.rendering import render_case_detail, render_contact_actions_panel, render_hub, render_queue, render_reply_preview
@@ -379,3 +380,103 @@ def test_fake_case_repository_preserves_manager_item_contract() -> None:
     assert loaded.item_detail.min_order == "3 packs"
     assert loaded.item_detail.increment == "1 pack"
     assert loaded.item_detail.packaging_context == "12 pcs"
+
+
+def test_ai_handoff_rendering_shows_structured_constraints_and_ambiguity_safely() -> None:
+    detail = CaseDetail(
+        case_id=uuid4(),
+        case_display_number=811,
+        commercial_status="open",
+        operational_status="active",
+        waiting_state="waiting_manager",
+        priority="high",
+        escalation_level="none",
+        assignment_label="Assigned to me",
+        linked_quote_display_number=811,
+        item_detail=ManagerItemDetail(
+            title="Nougat Selection Box",
+            selling_unit="box",
+            min_order="2 boxes",
+            increment="1 box",
+            packaging_context="24 pcs",
+            is_active=True,
+        ),
+    )
+    recommendation = AIRecommendation(
+        summary="Suggested alternatives due to uncertain customer preference.",
+        customer_intent="Customer needs closest substitute.",
+        risk_flags=["Primary SKU uncertain"],
+        missing_information=["Preferred flavor"],
+        recommended_next_step="Confirm preferred flavor and choose one alternative.",
+        recommended_action=RecommendedAction.CLARIFY,
+        draft_reply="We can offer alternatives. Please confirm your preferred flavor.",
+        draft_internal_note="Use alternatives list and verify flavor preference.",
+        clarification_questions=["Do you prefer almond or pistachio variant?"],
+        escalation_recommendation=False,
+        escalation_reason=None,
+        handoff_state=AIHandoffState.AMBIGUOUS,
+        handoff_rationale="Two similarly named SKUs matched; requires manager confirmation.",
+        resolved_item_title=None,
+        alternatives=[
+            {
+                "title": "Nougat Selection Box Almond",
+                "selling_unit": "box",
+                "min_order": "2 boxes",
+                "increment": "1 box",
+                "packaging_context": "24 pcs",
+                "availability": "active",
+                "rationale": "Closest match by title.",
+            }
+        ],
+        confidence=0.58,
+    )
+
+    rendered = render_case_detail(detail, ai_recommendation=recommendation, low_confidence_threshold=0.65)
+    assert "Handoff status: ambiguous" in rendered
+    assert "Structured commercial constraints" in rendered
+    assert "Selling unit: box" in rendered
+    assert "Min order: 2 boxes" in rendered
+    assert "Increment: 1 box" in rendered
+    assert "Manager action safety: do not send AI draft without manual correction/review." in rendered
+
+
+def test_ai_handoff_not_found_with_existing_item_forces_human_review_state() -> None:
+    detail = CaseDetail(
+        case_id=uuid4(),
+        case_display_number=812,
+        commercial_status="open",
+        operational_status="active",
+        waiting_state="waiting_manager",
+        priority="normal",
+        escalation_level="none",
+        assignment_label="Assigned to me",
+        linked_quote_display_number=812,
+        item_detail=ManagerItemDetail(
+            title="Truffle Gift Box",
+            selling_unit="box",
+            min_order="1 box",
+            increment="1 box",
+        ),
+    )
+    recommendation = AIRecommendation(
+        summary="No item found.",
+        customer_intent="Unknown",
+        risk_flags=[],
+        missing_information=["Exact SKU"],
+        recommended_next_step="Request exact SKU code.",
+        recommended_action=RecommendedAction.CLARIFY,
+        draft_reply="Could you share the exact SKU code?",
+        draft_internal_note="AI reported not_found.",
+        clarification_questions=["Can you share SKU code?"],
+        escalation_recommendation=False,
+        escalation_reason=None,
+        handoff_state=AIHandoffState.NOT_FOUND,
+        handoff_rationale="No direct match from AI.",
+        resolved_item_title=None,
+        alternatives=[],
+        confidence=0.5,
+    )
+
+    rendered = render_case_detail(detail, ai_recommendation=recommendation)
+    assert "Handoff status: needs_human_review" in rendered
+    assert "AI marked not found, but case already has item details." in rendered

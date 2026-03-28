@@ -10,7 +10,14 @@ from app.config.settings import Settings
 from app.models import CaseDetail, InternalNote, ThreadEntry
 from app.services.ai_cache import InMemoryAICache
 from app.services.ai_reader import AIReaderAnalysis, AIReaderConfig, AIReaderService, CaseAIPacketBuilder
-from app.services.ai_recommender import AIRecommendation, AIRecommenderConfig, AIRecommenderService, RecommendedAction
+from app.services.ai_recommender import (
+    AIHandoffState,
+    AIRecommendation,
+    AIRecommenderConfig,
+    AIRecommenderService,
+    RecommendedAction,
+    recommendation_supports_draft_adoption,
+)
 from app.services.ai_state import analysis_for_case, bind_ai_recommendation, bind_ai_result, clear_ai_snapshot, recommendation_for_case
 from app.services.rendering import render_case_detail
 from app.state.manager_session import ManagerSessionState
@@ -53,6 +60,29 @@ def _sample_case() -> CaseDetail:
         ],
         internal_notes=[InternalNote(body="Sensitive note: jane@company.com", author_label="Manager", created_at=datetime.now(timezone.utc))],
     )
+
+
+def _recommendation_payload(**overrides):
+    payload = {
+        "summary": "Customer asks for updated ETA and commit window.",
+        "customer_intent": "Need delivery certainty before approval.",
+        "risk_flags": ["Potential SLA breach"],
+        "missing_information": ["Confirmed shipment date"],
+        "recommended_next_step": "Confirm ETA with logistics and send concise status update.",
+        "recommended_action": "clarify",
+        "draft_reply": "Thanks for the follow-up. Could you confirm your required delivery date window?",
+        "draft_internal_note": "Need logistics ETA confirmation before final customer commitment.",
+        "clarification_questions": ["What delivery date do you need for go-live?"],
+        "escalation_recommendation": False,
+        "escalation_reason": None,
+        "handoff_state": "resolved",
+        "handoff_rationale": "Matched current case item and constraints from manager packet.",
+        "resolved_item_title": "Hazelnut Wafer Box",
+        "alternatives": [],
+        "confidence": 0.71,
+    }
+    payload.update(overrides)
+    return payload
 
 
 def test_ai_policy_settings_and_flags() -> None:
@@ -195,23 +225,9 @@ def test_ai_cache_hit_miss_ttl_and_malformed_payload_fail_safe() -> None:
 
 
 def test_recommender_schema_and_service_and_prompt_version_metadata() -> None:
-    recommendation = AIRecommendation.model_validate(
-        {
-            "summary": "Customer asks for updated ETA and commit window.",
-            "customer_intent": "Need delivery certainty before approval.",
-            "risk_flags": ["Potential SLA breach"],
-            "missing_information": ["Confirmed shipment date"],
-            "recommended_next_step": "Confirm ETA with logistics and send concise status update.",
-            "recommended_action": "clarify",
-            "draft_reply": "Thanks for the follow-up. Could you confirm your required delivery date window?",
-            "draft_internal_note": "Need logistics ETA confirmation before final customer commitment.",
-            "clarification_questions": ["What delivery date do you need for go-live?"],
-            "escalation_recommendation": False,
-            "escalation_reason": None,
-            "confidence": 0.71,
-        }
-    )
+    recommendation = AIRecommendation.model_validate(_recommendation_payload())
     assert recommendation.recommended_action == RecommendedAction.CLARIFY
+    assert recommendation.handoff_state == AIHandoffState.RESOLVED
 
     detail = _sample_case()
     packet = CaseAIPacketBuilder(max_input_chars=1800, include_internal_notes=True).build(detail, sla_state="near_breach")
@@ -266,6 +282,10 @@ def test_recommendation_state_case_bound_and_rendering_low_confidence_warning() 
         clarification_questions=[],
         escalation_recommendation=False,
         escalation_reason=None,
+        handoff_state=AIHandoffState.RESOLVED,
+        handoff_rationale="Resolved against current item detail.",
+        resolved_item_title="Hazelnut Wafer Box",
+        alternatives=[],
         confidence=0.42,
     )
     bind_ai_recommendation(state, case_a, recommendation, None, model="gpt-r", prompt_version="reco-v1", from_cache=False)
@@ -279,3 +299,36 @@ def test_recommendation_state_case_bound_and_rendering_low_confidence_warning() 
     clear_ai_snapshot(state)
     none_after_clear, _, _ = recommendation_for_case(state, case_a)
     assert none_after_clear is None
+
+
+def test_ai_recommendation_handoff_states_and_draft_adoption_gate() -> None:
+    resolved = AIRecommendation.model_validate(_recommendation_payload(handoff_state="resolved"))
+    alternatives = AIRecommendation.model_validate(
+        _recommendation_payload(
+            handoff_state="alternatives_available",
+            handoff_rationale="Primary match uncertain; alternatives listed.",
+            alternatives=[
+                {
+                    "title": "Hazelnut Wafer Case",
+                    "selling_unit": "case",
+                    "min_order": "1 case",
+                    "increment": "1 case",
+                    "packaging_context": "10 boxes",
+                    "availability": "active",
+                    "rationale": "Closest available packaging profile.",
+                }
+            ],
+        )
+    )
+    not_found = AIRecommendation.model_validate(
+        _recommendation_payload(
+            handoff_state="not_found",
+            handoff_rationale="No reliable item match in packet context.",
+            resolved_item_title=None,
+            alternatives=[],
+        )
+    )
+
+    assert recommendation_supports_draft_adoption(resolved) is True
+    assert recommendation_supports_draft_adoption(alternatives) is True
+    assert recommendation_supports_draft_adoption(not_found) is False
