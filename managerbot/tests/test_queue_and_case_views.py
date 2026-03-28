@@ -64,6 +64,9 @@ def test_queue_rendering_stable_numbers_and_order() -> None:
 
     assert "#101" in rendered and "#102" in rendered
     assert rendered.index("#101") < rendered.index("#102")
+    assert "Waiting for manager" in rendered
+    assert "Priority urgent" in rendered
+    assert "SLA healthy" in rendered
 
 
 def test_case_detail_render_read_only_and_claim_updates() -> None:
@@ -478,5 +481,42 @@ def test_ai_handoff_not_found_with_existing_item_forces_human_review_state() -> 
     )
 
     rendered = render_case_detail(detail, ai_recommendation=recommendation)
-    assert "Handoff status: needs_human_review" in rendered
+    assert "Handoff status: needs human review" in rendered
     assert "AI marked not found, but case already has item details." in rendered
+
+
+def test_case_detail_handoff_labels_and_action_safety_are_manager_readable() -> None:
+    detail = CaseDetail(
+        case_id=uuid4(),
+        case_display_number=813,
+        commercial_status="open",
+        operational_status="active",
+        waiting_state="waiting_manager",
+        priority="high",
+        escalation_level="none",
+        assignment_label="Assigned to me",
+        linked_quote_display_number=813,
+        item_detail=ManagerItemDetail(title="Wafer Box", selling_unit="box", min_order="2 boxes", increment="1 box"),
+    )
+    recommendation = AIRecommendation(
+        summary="Need manager decision.",
+        customer_intent="Select proper option.",
+        risk_flags=[],
+        missing_information=["Exact flavor"],
+        recommended_next_step="Clarify flavor and then send proposal.",
+        recommended_action=RecommendedAction.CLARIFY,
+        draft_reply="Please confirm preferred flavor.",
+        draft_internal_note="Ambiguous flavor request.",
+        clarification_questions=["Which flavor do you prefer?"],
+        escalation_recommendation=False,
+        escalation_reason=None,
+        handoff_state=AIHandoffState.AMBIGUOUS,
+        handoff_rationale="Two possible SKUs share similar naming.",
+        resolved_item_title=None,
+        alternatives=[],
+        confidence=0.61,
+    )
+
+    rendered = render_case_detail(detail, ai_recommendation=recommendation)
+    assert "Handoff status: ambiguous (requires manager check)" in rendered
+    assert "Manager action safety: do not send AI draft without manual correction/review." in rendered

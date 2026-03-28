@@ -504,7 +504,7 @@ def build_router(
                 if not recommendation or state.ai_case_id != state.selected_case_id:
                     await callback.answer("No valid AI recommendation for this case.", show_alert=True)
                 elif not recommendation_supports_draft_adoption(recommendation):
-                    await callback.answer("AI handoff is not safe for draft adoption. Review and edit manually.", show_alert=True)
+                    await callback.answer("AI handoff state requires manual review before adopting draft.", show_alert=True)
                 elif not compose_service.start_reply_from_ai(state, state.selected_case_id, recommendation.draft_reply):
                     await callback.answer("AI reply draft is unavailable for this case.", show_alert=True)
                 else:
@@ -527,7 +527,7 @@ def build_router(
                 if not recommendation or state.ai_case_id != state.selected_case_id:
                     await callback.answer("No valid AI recommendation for this case.", show_alert=True)
                 elif not recommendation_supports_draft_adoption(recommendation):
-                    await callback.answer("AI handoff is not safe for draft adoption. Review and edit manually.", show_alert=True)
+                    await callback.answer("AI handoff state requires manual review before adopting draft.", show_alert=True)
                 elif not compose_service.start_note_from_ai(state, state.selected_case_id, recommendation.draft_internal_note):
                     await callback.answer("AI note draft is unavailable for this case.", show_alert=True)
                 else:

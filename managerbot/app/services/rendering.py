@@ -64,20 +64,30 @@ def render_hub(actor: ManagerActor, presence: PresenceStatus, counts: dict[str, 
 
 def render_queue(queue_key: str, items: list[QueueItem], offset: int, filters: QueueFilters | None = None) -> str:
     sla = SlaService()
-    lines = [f"Queue: {queue_key}", f"Offset: {offset}"]
+    lines = [f"Queue · {queue_key}", f"Offset: {offset}"]
     if filters:
         lines.append(f"Filters: {render_filters(filters)}")
     lines.append("")
     for item in items:
         sla_state = sla.classify(item.sla_due_at)
-        archive_mark = " [ARCHIVE]" if item.is_archived else ""
-        lines.append(
-            f"#{item.case_display_number}{archive_mark} | {item.customer_label or '-'} | {item.operational_status}/{item.waiting_state} | sla:{sla_state} | p:{item.priority} e:{item.escalation_level}"
-        )
+        archive_mark = " · archived" if item.is_archived else ""
+        waiting = _waiting_label(item.waiting_state)
+        status = _status_label(item.operational_status)
+        priority = _priority_label(item.priority)
+        escalation = normalize_escalation_level(item.escalation_level) if is_escalated(item.escalation_level) else "none"
+        customer = item.customer_label or "Customer unavailable"
+        cues = [f"{status}", f"{waiting}", f"SLA {sla_state}", f"Priority {priority}"]
+        if escalation != "none":
+            cues.append(f"Escalation {escalation}")
+        if item.last_customer_message_at:
+            cues.append(f"Last customer msg {_age_hint(item.last_customer_message_at)}")
+        lines.append(f"#{item.case_display_number}{archive_mark} · {customer}")
+        lines.append(f"  {' | '.join(cues)}")
     if not items:
         lines.append("No cases in this queue.")
         lines.append("Try another lane or adjust filters.")
     return "\n".join(lines)
+
 
 
 def render_case_detail(
@@ -113,7 +123,7 @@ def render_case_detail(
         head.append(delivery_line)
     head.extend(_render_customer_card(detail.customer_card or CustomerCard(label=detail.customer_label)))
     head.append("")
-    head.append("Direct contact policy: use direct channel for quick clarification; keep case truth via internal note/reply.")
+    head.append("Direct contact policy: use direct contact when faster, then log outcome via internal note or customer reply.")
     head.append("\nCustomer thread:")
     if detail.thread_entries:
         for entry in detail.thread_entries[-5:]:
@@ -147,7 +157,7 @@ def render_case_detail(
     else:
         head.append("- No AI analysis yet. Tap AI Analyze.")
 
-    head.append("\nAI recommendations (advisory only — no auto-actions):")
+    head.append("\nAI recommendation and handoff (advisory only — manager confirms actions):")
     if ai_recommendation_error:
         head.append(f"- unavailable: {ai_recommendation_error}")
     elif ai_recommendation:
@@ -314,7 +324,7 @@ def _render_ai_handoff(recommendation: AIRecommendation, item: ManagerItemDetail
         status = AIHandoffState.NEEDS_HUMAN_REVIEW
         rationale = "AI marked not found, but case already has item details. Verify match manually."
 
-    lines = [f"- Handoff status: {status.value}", f"- Handoff rationale: {_snippet(rationale, 220)}"]
+    lines = [f"- Handoff status: {_handoff_label(status)}", f"- Handoff rationale: {_snippet(rationale, 220)}"]
     resolved_title = _resolved_item_title(item, recommendation)
     if resolved_title:
         lines.append(f"- Resolved item: {resolved_title}")
@@ -335,7 +345,7 @@ def _render_ai_handoff(recommendation: AIRecommendation, item: ManagerItemDetail
             if alt.increment:
                 alt_parts.append(f"Increment {alt.increment}")
             if alt.packaging_context:
-                alt_parts.append(f"Packaging {alt.packaging_context}")
+                alt_parts.append(f"In box {alt.packaging_context}")
             if alt.availability:
                 alt_parts.append(f"Availability {alt.availability}")
             rendered = " | ".join(alt_parts)
@@ -347,6 +357,36 @@ def _render_ai_handoff(recommendation: AIRecommendation, item: ManagerItemDetail
         lines.append("- Manager action safety: do not send AI draft without manual correction/review.")
     return lines
 
+
+
+
+def _handoff_label(status: AIHandoffState) -> str:
+    return {
+        AIHandoffState.RESOLVED: "resolved (safe to adapt with manager review)",
+        AIHandoffState.ALTERNATIVES_AVAILABLE: "alternatives available (pick option before draft use)",
+        AIHandoffState.AMBIGUOUS: "ambiguous (requires manager check)",
+        AIHandoffState.NOT_FOUND: "not found (requires manager check)",
+        AIHandoffState.NEEDS_HUMAN_REVIEW: "needs human review",
+    }[status]
+
+
+def _priority_label(priority: str) -> str:
+    labels = {"normal": "normal", "high": "high", "urgent": "urgent", "vip": "VIP"}
+    return labels.get(priority, priority)
+
+
+def _status_label(status: str) -> str:
+    labels = {"new": "New", "active": "Active", "resolved": "Resolved", "closed": "Closed"}
+    return labels.get(status, status)
+
+
+def _waiting_label(waiting_state: str) -> str:
+    labels = {
+        "waiting_manager": "Waiting for manager",
+        "waiting_customer": "Waiting for customer",
+        "none": "No wait flag",
+    }
+    return labels.get(waiting_state, waiting_state)
 
 def _resolved_item_title(item: ManagerItemDetail | None, recommendation: AIRecommendation) -> str | None:
     if item and item.title:
@@ -398,7 +438,7 @@ def render_search_results(query: str, results: list[SearchResultItem], filters: 
         order_hint = f" O#{item.linked_order_display_number}" if item.linked_order_display_number else ""
         identity_hint = _identity_hint(item.customer_label, item.customer_actor_id, item.customer_telegram_chat_id)
         lines.append(
-            f"#{item.case_display_number}{archive_mark}{order_hint} | {identity_hint} | {item.operational_status}/{item.waiting_state} | p:{item.priority} e:{item.escalation_level}"
+            f"#{item.case_display_number}{archive_mark}{order_hint} | {identity_hint} | {_status_label(item.operational_status)} | {_waiting_label(item.waiting_state)} | Priority {_priority_label(item.priority)} | Escalation {normalize_escalation_level(item.escalation_level) if is_escalated(item.escalation_level) else 'none'}"
         )
     return "\\n".join(lines)
 
